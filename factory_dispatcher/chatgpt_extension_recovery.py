@@ -17,6 +17,7 @@ from pathlib import Path
 from .chatgpt_browser import ChatGPTError
 from .chatgpt_extension_protocol import (
     RECOVERY_RELEASE,
+    RECOVERY_RELEASE_BOOTSTRAP,
     VERSION,
     binding,
     check_settings,
@@ -30,10 +31,16 @@ from .models import ACTIVE_STATES, DispatchRequest, DispatchState, ExecutorType
 from .mutex import LocalMutex, MutexBusyError
 from .receipts import MAX_JSON_BYTES, AttemptContext, decode_json_object, read_json_object
 
-# Deliberately narrow: the worker can emit this code only from NEW_CHAT, before SEND.
-# Adding a code requires proving its position in BOTH write-ahead state machines.
-PRE_SEND_ERRORS = frozenset({"CHATGPT_NEW_CHAT_FAILED"})
-PRE_SEND_PHASE = "NEW_CHAT_ATTEMPTED"
+# Deliberately narrow: each recoverable worker error is paired to the exact extension
+# write-ahead phase that proves SEND was never reached. Adding an entry requires proving
+# its position in BOTH write-ahead state machines.
+PRE_SEND_RECOVERY = {
+    "CHATGPT_NEW_CHAT_FAILED": ("NEW_CHAT_ATTEMPTED", RECOVERY_RELEASE),
+    "CHATGPT_BOOTSTRAP_MISMATCH": (
+        "INSERT_BOOTSTRAP_ATTEMPTED",
+        RECOVERY_RELEASE_BOOTSTRAP,
+    ),
+}
 ATTEMPT_FILES = frozenset(
     {"launch.json", "status.json", "browser.log", "bootstrap.txt", "worker.lock"}
 )
@@ -241,7 +248,9 @@ class LocalEvidence:
         require(status.get("state") == "STOPPED", "REFUSED_NOT_STOPPED")
         require(status.get("sendAttempted") is False, "REFUSED_SEND_EVIDENCE")
         require(status.get("operationalSuccess") is False, "REFUSED_OPERATIONAL_SUCCESS")
-        require(status.get("errorCode") in PRE_SEND_ERRORS, "REFUSED_NOT_PRE_SEND")
+        error_code = status.get("errorCode")
+        require(error_code in PRE_SEND_RECOVERY, "REFUSED_NOT_PRE_SEND")
+        expected_phase, recovery_control = PRE_SEND_RECOVERY[error_code]
         require(status.get("needsReconciliation") is True, "REFUSED_RECONCILIATION_STATE")
         no_send_or_receipt(status)
         require(
@@ -256,14 +265,14 @@ class LocalEvidence:
         expected = {
             "reservationId": manifest.get("reservationId"),
             "binding": pinned,
-            "phase": PRE_SEND_PHASE,
+            "phase": expected_phase,
         }
         # Strict command validation also checks the reservation ID format.
         release = command(
             {
                 "protocolVersion": VERSION,
                 "type": "CONTROL",
-                "control": RECOVERY_RELEASE,
+                "control": recovery_control,
                 "requestId": str(uuid.uuid4()),
                 "binding": pinned,
                 "reservationId": expected["reservationId"],
