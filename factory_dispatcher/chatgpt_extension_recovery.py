@@ -36,6 +36,7 @@ from .receipts import MAX_JSON_BYTES, AttemptContext, decode_json_object, read_j
 # its position in BOTH write-ahead state machines.
 PRE_SEND_RECOVERY = {
     "CHATGPT_NEW_CHAT_FAILED": ("NEW_CHAT_ATTEMPTED", RECOVERY_RELEASE),
+    "CHATGPT_BINDING_CHANGED": ("NEW_CHAT_ATTEMPTED", RECOVERY_RELEASE),
     "CHATGPT_BOOTSTRAP_MISMATCH": (
         "INSERT_BOOTSTRAP_ATTEMPTED",
         RECOVERY_RELEASE_BOOTSTRAP,
