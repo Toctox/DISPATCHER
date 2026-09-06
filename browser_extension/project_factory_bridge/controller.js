@@ -88,7 +88,13 @@ export class Controller {
         return {};
       }
       if (["PRECHECK", "NEW_CHAT"].includes(value.action) && active) fail("CHATGPT_TAB_BUSY");
-      if (value.action === "PRECHECK") return {binding: await this.inspect(value.binding)};
+      if (value.action === "PRECHECK") {
+        // Only the launcher's unpinned PRECHECK may normalize the dedicated Factory Tab.
+        // This happens before claim/reservation, so a full-document transition cannot make
+        // an execution ambiguous. The worker's pinned PRECHECK remains strictly read-only.
+        if (!("binding" in value)) await this.registry.prepareRoot();
+        return {binding: await this.inspect(value.binding)};
+      }
       if (value.action !== "NEW_CHAT") {
         if (!active || active.reservationId !== value.reservationId ||
             !sameBinding(active.binding, value.binding)) fail("CHATGPT_RESERVATION_INVALID");
