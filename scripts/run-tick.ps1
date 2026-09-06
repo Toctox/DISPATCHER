@@ -35,9 +35,14 @@ function Write-ChatGptBridgeDiagnostic {
             $statePath = [System.IO.Path]::GetFullPath((Join-Path $ProjectPath $stateSetting))
         }
 
+        # The bridge reservation is deliberately fixed under <project>/state,
+        # independently of the configurable worker state directory.
         $reservationPath = Join-Path $ProjectPath 'state\chatgpt-bridge\reservation.json'
         if (-not (Test-Path -LiteralPath $reservationPath -PathType Leaf)) {
-            $payload = [ordered]@{ kind = 'CHATGPT_BRIDGE_DIAGNOSTIC'; reservation = 'NONE' }
+            $payload = [ordered]@{
+                kind = 'CHATGPT_BRIDGE_DIAGNOSTIC'
+                reservation = 'NONE'
+            }
             [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
             return
         }
@@ -45,7 +50,10 @@ function Write-ChatGptBridgeDiagnostic {
         $reservation = Get-Content -LiteralPath $reservationPath -Raw | ConvertFrom-Json
         $reservationId = [string]$reservation.reservationId
         if ([string]::IsNullOrWhiteSpace($reservationId)) {
-            $payload = [ordered]@{ kind = 'CHATGPT_BRIDGE_DIAGNOSTIC'; reservation = 'NONE' }
+            $payload = [ordered]@{
+                kind = 'CHATGPT_BRIDGE_DIAGNOSTIC'
+                reservation = 'NONE'
+            }
             [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
             return
         }
@@ -64,7 +72,9 @@ function Write-ChatGptBridgeDiagnostic {
             foreach ($launchPath in Get-ChildItem -LiteralPath $runsPath -Filter 'launch.json' -File -Recurse -ErrorAction SilentlyContinue) {
                 try {
                     $launch = Get-Content -LiteralPath $launchPath.FullName -Raw | ConvertFrom-Json
-                    if ([string]$launch.reservationId -ne $reservationId) { continue }
+                    if ([string]$launch.reservationId -ne $reservationId) {
+                        continue
+                    }
                     $launchMatched = $true
                     $dispatchId = [string]$launch.execution.dispatchId
                     $attemptId = [string]$launch.execution.attemptId
@@ -73,14 +83,21 @@ function Write-ChatGptBridgeDiagnostic {
                         $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
                         $workerState = [string]$status.state
                         $errorCode = [string]$status.errorCode
-                        if ($null -ne $status.sendAttempted) { $sendAttempted = [bool]$status.sendAttempted }
-                        if ($null -ne $status.operationalSuccess) { $operationalSuccess = [bool]$status.operationalSuccess }
-                        if ($null -ne $status.needsReconciliation) { $needsReconciliation = [bool]$status.needsReconciliation }
+                        if ($null -ne $status.sendAttempted) {
+                            $sendAttempted = [bool]$status.sendAttempted
+                        }
+                        if ($null -ne $status.operationalSuccess) {
+                            $operationalSuccess = [bool]$status.operationalSuccess
+                        }
+                        if ($null -ne $status.needsReconciliation) {
+                            $needsReconciliation = [bool]$status.needsReconciliation
+                        }
                     }
                     break
                 }
                 catch {
-                    # Diagnostics must never mutate state or prevent the canonical tick.
+                    # Ignore a malformed unrelated historical attempt. Diagnostics must
+                    # never mutate state or prevent the canonical dispatcher tick.
                 }
             }
         }
@@ -116,33 +133,6 @@ function Write-ChatGptBridgeDiagnostic {
     }
 }
 
-function Invoke-ExactBlockedSmokeRecovery {
-    param(
-        [string]$PythonPath,
-        [string]$ConfigPath
-    )
-
-    # One exact, evidence-gated recovery. The Python recovery module independently
-    # verifies STOPPED + sendAttempted=false + queue identity + receipt absence +
-    # reservation phase before it can release anything. No force/reset path exists.
-    $args = @(
-        '-m', 'factory_dispatcher.chatgpt_extension_recover',
-        '--config', $ConfigPath,
-        '--dispatch-id', 'D-SMOKE-CHATGPT-0007',
-        '--attempt-id', 'D-SMOKE-CHATGPT-0007-A001'
-    )
-    $output = (& $PythonPath @args | Out-String).Trim()
-    $code = $LASTEXITCODE
-    $payload = [ordered]@{
-        kind = 'CHATGPT_RECOVERY_ATTEMPT'
-        dispatchId = 'D-SMOKE-CHATGPT-0007'
-        attemptId = 'D-SMOKE-CHATGPT-0007-A001'
-        exitCode = $code
-        output = $output
-    }
-    [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
-}
-
 $dispatcherArguments = @($dispatcherPath, '--tick', '--config', $configPath)
 if ($DryRun) {
     $dispatcherArguments += '--dry-run'
@@ -150,9 +140,6 @@ if ($DryRun) {
 
 Push-Location -LiteralPath $projectPath
 try {
-    if (-not $DryRun) {
-        Invoke-ExactBlockedSmokeRecovery -PythonPath $pythonPath -ConfigPath $configPath
-    }
     Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath -ConfigPath $configPath
     & $pythonPath @dispatcherArguments
     exit $LASTEXITCODE
