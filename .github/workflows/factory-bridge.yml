@@ -37,3 +37,10 @@ jobs:
           $exe = Get-Item .\FactoryBridge.exe
           if ($exe.Length -le 0) { throw "FactoryBridge.exe is empty" }
           Write-Host "FactoryBridge.exe bytes=$($exe.Length)"
+      - name: Publish Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: FactoryBridge-windows-amd64
+          path: factory_bridge/FactoryBridge.exe
+          if-no-files-found: error
+          retention-days: 7
