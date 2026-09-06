@@ -15,11 +15,7 @@
   const navigationSupported = typeof globalThis.navigation?.addEventListener === "function";
   if (navigationSupported) {
     navigation.addEventListener("navigate", event => {
-      // Observe navigation metadata only. Do not intercept, cancel, or inspect conversation DOM.
       const destination = new URL(event.destination.url);
-      // Before any reservation exists, same-route SPA churn cannot authorize a side effect.
-      // Keep the document identity stable so NEW_CHAT can still establish the clean surface.
-      // A route change, reload/pagehide, or any navigation after reservation still fails closed.
       if (phase === "IDLE" && event.destination.sameDocument &&
           destination.origin === location.origin && destination.pathname === location.pathname) {
         return;
@@ -41,27 +37,71 @@
   const {candidates} = PFSelection;
   function control(kind) {
     const found = candidates(kind);
-    // Actions require one usable target, never an arbitrary first raw match.
-    if (found.length !== 1) {
-      fail("CHATGPT_SELECTOR_UNAVAILABLE");
-    }
+    if (found.length !== 1) fail("CHATGPT_SELECTOR_UNAVAILABLE");
     return found[0];
   }
   function precheck() {
     if (!navigationSupported) fail("CHATGPT_FACTORY_TAB_INVALID");
-    // Account controls are evidence, not action targets: more than one is legitimate.
     if (location.origin !== "https://chatgpt.com" || candidates("login").length > 0 ||
         candidates("account").length < 1) fail("CHATGPT_AUTH_REQUIRED");
     control("newChat");
     control("composer");
+  }
+  function structuralDiagnostic() {
+    const selectors = [
+      "textarea", '[contenteditable="true"]', "button", '[role="button"]',
+      "[data-testid]", "a[aria-label]"
+    ];
+    const seen = new Set();
+    const controls = [];
+    for (const selector of selectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (seen.has(element)) continue;
+        seen.add(element);
+        const rect = element.getBoundingClientRect();
+        controls.push({
+          tag: element.tagName.toLowerCase(),
+          id: element.id || null,
+          role: element.getAttribute("role"),
+          ariaLabel: element.getAttribute("aria-label"),
+          dataTestId: element.getAttribute("data-testid"),
+          contentEditable: element.getAttribute("contenteditable"),
+          type: element.getAttribute("type"),
+          name: element.getAttribute("name"),
+          placeholder: ["TEXTAREA", "INPUT"].includes(element.tagName) ||
+            element.getAttribute("contenteditable") === "true" ? element.getAttribute("placeholder") : null,
+          usable: PFSelection.isUsable(element),
+          rect: {
+            x: Math.round(rect.x), y: Math.round(rect.y),
+            width: Math.round(rect.width), height: Math.round(rect.height)
+          }
+        });
+        if (controls.length >= 120) break;
+      }
+      if (controls.length >= 120) break;
+    }
+    return {
+      origin: location.origin,
+      pathname: location.pathname,
+      readyState: document.readyState,
+      selectorCounts: Object.fromEntries(Object.keys(PFSelectors).map(kind => [kind, {
+        raw: PFSelection.rawMatches(kind).length,
+        usable: PFSelection.candidates(kind).length
+      }])),
+      count: controls.length,
+      controls
+    };
   }
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   async function execute(value) {
     if (busy) fail("CHATGPT_TAB_BUSY");
     busy = true;
     try {
-      if (!value || !["PRECHECK", "NEW_CHAT", "INSERT_BOOTSTRAP", "SEND"].includes(value.action)) {
+      if (!value || !["PRECHECK", "NEW_CHAT", "INSERT_BOOTSTRAP", "SEND", "DOM_DIAGNOSTIC_OPTIONS"].includes(value.action)) {
         fail("CHATGPT_PROTOCOL_INVALID");
+      }
+      if (value.action === "DOM_DIAGNOSTIC_OPTIONS") {
+        return {status: "OK", diagnostic: structuralDiagnostic()};
       }
       if (value.action === "PRECHECK") {
         precheck();
@@ -69,16 +109,10 @@
       }
       requireBinding(value);
       if (value.action === "NEW_CHAT") {
-        // Persistent dispatch exclusion is owned by the extension controller.
         precheck();
         reservationId = value.reservationId;
         phase = "NEW_CHAT_ATTEMPTED";
         expectedBootstrap = null;
-        // A dedicated Factory Tab is normally registered while already on the pristine
-        // new-chat surface. Do not manufacture a navigation in that state: live ChatGPT
-        // may implement the New Chat control as a full-document transition, which would
-        // correctly invalidate the pinned documentId before any bootstrap can be inserted.
-        // Root + empty composer is sufficient mechanical evidence that no reset is needed.
         if (location.pathname === "/" && !location.search && !location.hash &&
             PFComposer.read(control("composer")) === "") {
           phase = "NEW_CHAT";
@@ -96,7 +130,6 @@
               return {status: "OK"};
             }
           } catch (error) {
-            // SPA rendering can temporarily replace the composer. Never inspect other DOM.
             if (error.message !== "CHATGPT_SELECTOR_UNAVAILABLE") throw error;
           }
           await delay(100);
@@ -108,7 +141,6 @@
         if (phase !== "NEW_CHAT") fail("CHATGPT_RESERVATION_INVALID");
         phase = "INSERT_BOOTSTRAP_ATTEMPTED";
         PFComposer.insert(control("composer"), value.bootstrap);
-        // Allow React's render to settle, then read only the composer again.
         await delay(100);
         requireBinding(value);
         if (PFComposer.read(control("composer")) !== value.bootstrap) fail("CHATGPT_BOOTSTRAP_MISMATCH");
@@ -123,7 +155,7 @@
       requireBinding(value);
       if (!Number.isSafeInteger(value.expiresAt) || Date.now() >= value.expiresAt) fail("CHATGPT_SEND_UNCERTAIN");
       expectedBootstrap = null;
-      button.click(); // Exactly once. No DOM inspection or response monitoring after this point.
+      button.click();
       return {status: "OK"};
     } finally { busy = false; }
   }
