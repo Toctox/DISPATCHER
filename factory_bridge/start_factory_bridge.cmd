@@ -24,6 +24,10 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem Ensure the old executor cannot race the new executor.
+taskkill /IM FactoryBridge.exe /F >nul 2>&1
+taskkill /IM FactoryBridge-0.4.0.exe /F >nul 2>&1
+
 start "FactoryBridge Executor" cmd /k ""%EXE%" --mode executor"
 start "FactoryBridge Panel" cmd /k ""%EXE%" --mode panel"
 
