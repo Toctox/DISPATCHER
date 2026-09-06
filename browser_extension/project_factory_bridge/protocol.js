@@ -3,6 +3,7 @@ export const CAPABILITY = "FACTORY_TAB_V1";
 export const ACTIONS = Object.freeze(["PRECHECK", "NEW_CHAT", "INSERT_BOOTSTRAP", "SEND"]);
 export const CONTROL = "RECEIPT_CONFIRMED";
 export const RECOVERY_RELEASE = "PRE_SEND_RECOVERY_RELEASE";
+export const RECOVERY_RELEASE_BOOTSTRAP = "PRE_BOOTSTRAP_RECOVERY_RELEASE";
 export const CODES = new Set([
   "CHATGPT_BRIDGE_UNAVAILABLE", "CHATGPT_EXTENSION_NOT_PAIRED",
   "CHATGPT_EXTENSION_VERSION_MISMATCH", "CHATGPT_FACTORY_TAB_NOT_CONFIGURED",
@@ -31,7 +32,7 @@ export function validateCommand(value) {
   if (value?.protocolVersion !== VERSION) fail("CHATGPT_EXTENSION_VERSION_MISMATCH");
   const action = value.type === "CONTROL" ? value.control : value.action;
   if (!((value.type === "COMMAND" && ACTIONS.includes(action)) ||
-        (value.type === "CONTROL" && [CONTROL, RECOVERY_RELEASE].includes(action)))) fail();
+        (value.type === "CONTROL" && [CONTROL, RECOVERY_RELEASE, RECOVERY_RELEASE_BOOTSTRAP].includes(action)))) fail();
   const keys = ["protocolVersion", "type", "requestId", value.type === "CONTROL" ? "control" : "action"];
   if (action !== "PRECHECK") keys.push("binding", "reservationId");
   else if ("binding" in value) keys.push("binding");
