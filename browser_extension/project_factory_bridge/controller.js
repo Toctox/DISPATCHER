@@ -43,8 +43,8 @@ export class Controller {
     if (!exactKeys(value, keys) || value.status !== "OK") fail();
     return value;
   }
-  async inspect(expected) {
-    const registration = await this.registry.registered();
+  async inspect(expected, preparedRegistration = null) {
+    const registration = preparedRegistration || await this.registry.registered();
     if (expected && (expected.tabId !== registration.factoryTabId ||
         expected.browserInstanceId !== registration.browserInstanceId)) fail("CHATGPT_BINDING_CHANGED");
     const page = await this.content(registration.factoryTabId, {action: "PRECHECK"});
@@ -92,8 +92,8 @@ export class Controller {
         // Only the launcher's unpinned PRECHECK may normalize the dedicated Factory Tab.
         // This happens before claim/reservation, so a full-document transition cannot make
         // an execution ambiguous. The worker's pinned PRECHECK remains strictly read-only.
-        if (!("binding" in value)) await this.registry.prepareRoot();
-        return {binding: await this.inspect(value.binding)};
+        const prepared = "binding" in value ? null : await this.registry.prepareRoot();
+        return {binding: await this.inspect(value.binding, prepared)};
       }
       if (value.action !== "NEW_CHAT") {
         if (!active || active.reservationId !== value.reservationId ||
