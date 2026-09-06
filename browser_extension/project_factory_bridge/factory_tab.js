@@ -52,8 +52,6 @@ export class FactoryTabRegistry {
     let tab = await this.tab(registration.factoryTabId);
     if (isPristineRoute(tab) || tab.status !== "complete") return registration;
 
-    // Normalize only before an unpinned PRECHECK, while no reservation exists. A full
-    // document navigation is safe here because no documentId has been issued yet.
     try {
       await this.api.tabs.update(registration.factoryTabId, {url: "https://chatgpt.com/"});
     } catch { fail("CHATGPT_FACTORY_TAB_INVALID"); }
@@ -67,7 +65,6 @@ export class FactoryTabRegistry {
     fail("CHATGPT_FACTORY_TAB_INVALID");
   }
   async list() {
-    // Options-only discovery. No automatic selection, titles, conversation URLs or active-tab hints.
     return (await this.api.tabs.query({url: "https://chatgpt.com/*"}))
       .filter(tab => Number.isSafeInteger(tab.id) && tab.id >= 0 && isChatGPTTab(tab))
       .map(tab => ({factoryTabId: tab.id, windowId: tab.windowId, position: tab.index + 1}));
@@ -79,7 +76,7 @@ export class FactoryTabRegistry {
     if (factoryTab) {
       if (Number.isSafeInteger(factoryTab.factoryTabId)) {
         try { originValid = hasChatGPTOrigin(await this.api.tabs.get(factoryTab.factoryTabId)); }
-        catch { /* Closed tabs have no current origin. */ }
+        catch { }
       }
       try { await this.registered(); }
       catch (error) { errorCode = safeCode(error); }
@@ -91,14 +88,28 @@ export class FactoryTabRegistry {
   async register(tabId) {
     if (!Number.isSafeInteger(tabId) || tabId < 0) fail("CHATGPT_FACTORY_TAB_INVALID");
     await this.tab(tabId);
-    // Never persist a conversation URL as identity. Session identity prevents ID reuse on restart.
     await this.api.storage.local.set({factoryTab: {factoryTabId: tabId, browserInstanceId: this.instanceId}});
   }
   async clear() { await this.api.storage.local.remove("factoryTab"); }
+  async diagnostic() {
+    const registration = await this.registered();
+    let value;
+    try {
+      value = await this.api.tabs.sendMessage(
+        registration.factoryTabId,
+        {action: "DOM_DIAGNOSTIC_OPTIONS"},
+        {frameId: 0}
+      );
+    } catch { fail("CHATGPT_FACTORY_TAB_INVALID"); }
+    if (!exactKeys(value, ["status", "diagnostic"]) || value.status !== "OK" ||
+        !value.diagnostic || typeof value.diagnostic !== "object" || Array.isArray(value.diagnostic)) {
+      fail("CHATGPT_SELECTOR_UNAVAILABLE");
+    }
+    return value.diagnostic;
+  }
 }
 
 export async function optionsMessage(controller, message, sender, optionsUrl) {
-  // This channel is private to the extension's Options page, not a bridge/UI command.
   if (sender?.id !== controller.api.runtime.id || sender.url !== optionsUrl ||
       message?.type !== "FACTORY_TAB_OPTIONS") fail("CHATGPT_PROTOCOL_INVALID");
   const keys = ["type", "action"];
@@ -106,6 +117,7 @@ export async function optionsMessage(controller, message, sender, optionsUrl) {
   if (!exactKeys(message, keys)) fail("CHATGPT_PROTOCOL_INVALID");
   if (message.action === "LIST") return {tabs: await controller.registry.list()};
   if (message.action === "STATUS") return await controller.registry.status();
+  if (message.action === "DIAGNOSE") return {diagnostic: await controller.registry.diagnostic()};
   if (!["REGISTER", "CLEAR"].includes(message.action)) fail("CHATGPT_PROTOCOL_INVALID");
   return await controller.configureFactoryTab(message.action, message.factoryTabId);
 }
