@@ -1,4 +1,4 @@
-import {CAPABILITY, CONTROL, RECOVERY_RELEASE, VERSION, exactKeys, fail, sameBinding, safeCode, validateCommand} from "./protocol.js";
+import {CAPABILITY, CONTROL, RECOVERY_RELEASE, RECOVERY_RELEASE_BOOTSTRAP, VERSION, exactKeys, fail, sameBinding, safeCode, validateCommand} from "./protocol.js";
 import {FactoryTabRegistry} from "./factory_tab.js";
 
 export class Controller {
@@ -54,14 +54,16 @@ export class Controller {
     this.busy = true;
     try {
       const {activeReservation: active} = await this.api.storage.local.get("activeReservation");
-      if (value.action === RECOVERY_RELEASE) {
-        // Only the authenticated bridge emits this after checking local/Drive evidence.
-        // Compare the OLD pinned identity, not the current tab/session. No DOM or tab API.
+      if ([RECOVERY_RELEASE, RECOVERY_RELEASE_BOOTSTRAP].includes(value.action)) {
+        // Only the authenticated bridge emits these after checking local/Drive evidence.
+        // Each control is tied to one exact write-ahead phase; neither inspects the current tab.
+        const expectedPhase = value.action === RECOVERY_RELEASE
+          ? "NEW_CHAT_ATTEMPTED" : "INSERT_BOOTSTRAP_ATTEMPTED";
         if (!exactKeys(active, ["reservationId", "binding", "phase"]) ||
             active.reservationId !== value.reservationId ||
             !sameBinding(active.binding, value.binding) ||
             active.binding.extensionId !== this.api.runtime.id ||
-            active.phase !== "NEW_CHAT_ATTEMPTED") fail("CHATGPT_RESERVATION_INVALID");
+            active.phase !== expectedPhase) fail("CHATGPT_RESERVATION_INVALID");
         await this.api.storage.local.remove("activeReservation");
         return {};
       }
