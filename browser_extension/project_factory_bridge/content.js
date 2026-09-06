@@ -17,6 +17,13 @@
     navigation.addEventListener("navigate", event => {
       // Observe navigation metadata only. Do not intercept, cancel, or inspect conversation DOM.
       const destination = new URL(event.destination.url);
+      // Before any reservation exists, same-route SPA churn cannot authorize a side effect.
+      // Keep the document identity stable so NEW_CHAT can still establish the clean surface.
+      // A route change, reload/pagehide, or any navigation after reservation still fails closed.
+      if (phase === "IDLE" && event.destination.sameDocument &&
+          destination.origin === location.origin && destination.pathname === location.pathname) {
+        return;
+      }
       if (allowedNewChatNavigation && phase === "NEW_CHAT_ATTEMPTED" &&
           event.destination.sameDocument && destination.origin === "https://chatgpt.com" &&
           destination.pathname === "/" && !destination.search && !destination.hash &&
