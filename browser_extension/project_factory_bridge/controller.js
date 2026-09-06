@@ -56,7 +56,11 @@ export class Controller {
       const {activeReservation: active} = await this.api.storage.local.get("activeReservation");
       if ([RECOVERY_RELEASE, RECOVERY_RELEASE_BOOTSTRAP].includes(value.action)) {
         // Only the authenticated bridge emits these after checking local/Drive evidence.
-        // Each control is tied to one exact write-ahead phase; neither inspects the current tab.
+        // NEW_CHAT recovery is idempotent when the extension never persisted its own
+        // reservation: the bridge write-ahead barrier can exist before extension storage.
+        if (value.action === RECOVERY_RELEASE && active === undefined) return {};
+        // Otherwise each control is tied to one exact write-ahead phase and neither
+        // inspects the current tab.
         const expectedPhase = value.action === RECOVERY_RELEASE
           ? "NEW_CHAT_ATTEMPTED" : "INSERT_BOOTSTRAP_ATTEMPTED";
         if (!exactKeys(active, ["reservationId", "binding", "phase"]) ||
