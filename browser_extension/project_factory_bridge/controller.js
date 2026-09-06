@@ -101,11 +101,22 @@ export class Controller {
         await this.api.storage.local.remove("activeReservation");
         return {};
       }
-      await this.inspect(value.binding);
+      if (value.action === "NEW_CHAT") {
+        // The worker has just completed the pinned PRECHECK. Re-running PRECHECK here
+        // creates a race with harmless ChatGPT SPA churn before any side effect exists.
+        // Revalidate stable registration identity only; content.js performs the final,
+        // exact documentId check immediately before NEW_CHAT can touch the page.
+        const registration = await this.registry.registered();
+        if (value.binding.extensionId !== this.api.runtime.id ||
+            value.binding.browserInstanceId !== registration.browserInstanceId ||
+            value.binding.tabId !== registration.factoryTabId) fail("CHATGPT_BINDING_CHANGED");
+      } else {
+        await this.inspect(value.binding);
+      }
       const reservation = {reservationId: value.reservationId, binding: value.binding,
         phase: `${value.action}_ATTEMPTED`};
       await this.api.storage.local.set({activeReservation: reservation});
-      // New tab/reload between inspect and this message is rejected by documentId in content.js.
+      // The content script rejects any stale documentId before touching the page.
       const command = {action: value.action, documentId: value.binding.documentId,
         reservationId: value.reservationId};
       if (value.action === "INSERT_BOOTSTRAP") command.bootstrap = value.bootstrap;
