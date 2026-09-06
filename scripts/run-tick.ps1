@@ -8,6 +8,7 @@ $projectPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $pythonPath = Join-Path $projectPath '.venv\Scripts\python.exe'
 $dispatcherPath = Join-Path $projectPath 'dispatcher.py'
 $configPath = Join-Path $projectPath 'config.json'
+$bridgeRuntimeRevision = 'bridge-resilience-v1'
 
 if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
     throw "Virtual environment not found: $pythonPath"
@@ -29,14 +30,45 @@ function Test-LoopbackPort {
     finally { $client.Close() }
 }
 
+function Stop-ExactChatGptBridgeListener {
+    param([int]$Port,[string]$PythonPath,[string]$ConfigPath)
+    $listener = Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $listener) { return }
+    $process = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $listener.OwningProcess) -ErrorAction Stop
+    $expectedExe = [IO.Path]::GetFullPath($PythonPath)
+    $actualExe = if ($process.ExecutablePath) { [IO.Path]::GetFullPath([string]$process.ExecutablePath) } else { '' }
+    $commandLine = [string]$process.CommandLine
+    if ($actualExe -ne $expectedExe -or
+        $commandLine -notlike '*factory_dispatcher.chatgpt_extension_bridge*' -or
+        $commandLine -notlike ('*' + $ConfigPath + '*')) {
+        throw 'Refusing to stop a non-FactoryDispatcher process on the ChatGPT bridge port.'
+    }
+    Stop-Process -Id $listener.OwningProcess -Force -ErrorAction Stop
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        Start-Sleep -Milliseconds 100
+        if (-not (Test-LoopbackPort -Port $Port)) { return }
+    }
+    throw 'Previous ChatGPT extension bridge did not stop.'
+}
+
 function Ensure-ChatGptExtensionBridge {
-    param([string]$ProjectPath,[string]$PythonPath,[string]$ConfigPath)
+    param([string]$ProjectPath,[string]$PythonPath,[string]$ConfigPath,[string]$Revision)
     $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
     if ([string]$config.chatGptBrowserMode -ne 'EXTENSION_BRIDGE' -or
         -not [bool]$config.chatGptExtensionBridgeEnabled) { return }
     $port = [int]$config.chatGptExtensionBridgePort
     if ($port -lt 1 -or $port -gt 65535) { throw 'Invalid ChatGPT extension bridge port.' }
-    if (Test-LoopbackPort -Port $port) { return }
+
+    $revisionPath = Join-Path $ProjectPath 'state\chatgpt-bridge\runtime-revision.txt'
+    $currentRevision = ''
+    if (Test-Path -LiteralPath $revisionPath -PathType Leaf) {
+        $currentRevision = (Get-Content -LiteralPath $revisionPath -Raw).Trim()
+    }
+    if ((Test-LoopbackPort -Port $port) -and $currentRevision -eq $Revision) { return }
+    if (Test-LoopbackPort -Port $port) {
+        Stop-ExactChatGptBridgeListener -Port $port -PythonPath $PythonPath -ConfigPath $ConfigPath
+    }
 
     $configArgument = '"' + $ConfigPath + '"'
     Start-Process -FilePath $PythonPath `
@@ -46,7 +78,15 @@ function Ensure-ChatGptExtensionBridge {
 
     for ($attempt = 0; $attempt -lt 24; $attempt++) {
         Start-Sleep -Milliseconds 250
-        if (Test-LoopbackPort -Port $port) { return }
+        if (Test-LoopbackPort -Port $port) {
+            $directory = Split-Path -Parent $revisionPath
+            if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+                New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            }
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [IO.File]::WriteAllText($revisionPath, $Revision, $utf8NoBom)
+            return
+        }
     }
     throw 'ChatGPT extension bridge did not become available.'
 }
@@ -118,7 +158,7 @@ if ($DryRun) {
 
 Push-Location -LiteralPath $projectPath
 try {
-    Ensure-ChatGptExtensionBridge -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath
+    Ensure-ChatGptExtensionBridge -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath -Revision $bridgeRuntimeRevision
     Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath
     if ($DryRun) {
         Write-LatestChatGptWorkerDiagnostic -ProjectPath $projectPath
