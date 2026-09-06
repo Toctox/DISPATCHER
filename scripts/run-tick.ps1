@@ -37,21 +37,21 @@ function Stop-ExactChatGptBridgeListener {
     if ($null -eq $listener) { return }
 
     $process = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $listener.OwningProcess) -ErrorAction Stop
-    $expectedPython = [IO.Path]::GetFullPath($PythonPath)
     $expectedConfig = [IO.Path]::GetFullPath($ConfigPath)
     $actualExe = if ($process.ExecutablePath) { [IO.Path]::GetFullPath([string]$process.ExecutablePath) } else { '' }
     $commandLine = [string]$process.CommandLine
     $actualName = if ($actualExe) { [IO.Path]::GetFileName($actualExe) } else { '' }
 
-    # Windows virtual environments can report the base interpreter in ExecutablePath.
-    # The original command line still contains the exact venv launcher. Require all
-    # three identity anchors before terminating anything on the loopback port.
+    # Legacy manual launches may use relative .venv/config paths and Windows can
+    # report the base interpreter in ExecutablePath. Prove identity using the
+    # loopback listener plus the exact Python module and its config argument.
     $isPython = $actualName -match '^python(?:[0-9.]+)?\.exe$'
-    $hasExactVenv = $commandLine.IndexOf($expectedPython, [StringComparison]::OrdinalIgnoreCase) -ge 0
     $hasExactModule = $commandLine.IndexOf('-m factory_dispatcher.chatgpt_extension_bridge', [StringComparison]::OrdinalIgnoreCase) -ge 0
-    $hasExactConfig = $commandLine.IndexOf($expectedConfig, [StringComparison]::OrdinalIgnoreCase) -ge 0
-    if (-not ($isPython -and $hasExactVenv -and $hasExactModule -and $hasExactConfig)) {
-        throw 'Refusing to stop a process that cannot be proven to be the exact FactoryDispatcher extension bridge.'
+    $hasConfigSwitch = $commandLine.IndexOf('--config', [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $hasConfigValue = $commandLine.IndexOf($expectedConfig, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $commandLine -match '(?i)--config\s+["'']?\.?[\\/]?config\.json["'']?(?:\s|$)'
+    if (-not ($isPython -and $hasExactModule -and $hasConfigSwitch -and $hasConfigValue)) {
+        throw 'Refusing to stop a process that cannot be proven to be the FactoryDispatcher extension bridge.'
     }
 
     Stop-Process -Id $listener.OwningProcess -Force -ErrorAction Stop
