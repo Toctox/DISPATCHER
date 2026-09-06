@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const bridgeVersion = "0.3.1"
+const bridgeVersion = "0.4.0"
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
@@ -24,6 +24,7 @@ type Config struct {
 	BridgeRoot        string `json:"bridgeRoot"`
 	DispatcherWorkDir string `json:"dispatcherWorkDir"`
 	AllowGitPull      bool   `json:"allowGitPull"`
+	AllowGitPush      bool   `json:"allowGitPush"`
 	CommandTimeoutSec int    `json:"commandTimeoutSec"`
 	PollIntervalMs    int    `json:"pollIntervalMs,omitempty"`
 }
@@ -177,6 +178,24 @@ func executeAction(cfg Config, cmd Command, r runner) Result {
 			dir:     cfg.DispatcherWorkDir,
 		})
 
+	case "git.push":
+		if !cfg.AllowGitPush {
+			res.Error = "git.push is disabled locally (allowGitPush=false)"
+			finish(&res, start)
+			return res
+		}
+		if strings.TrimSpace(cfg.DispatcherWorkDir) == "" {
+			res.Error = "dispatcherWorkDir is not configured"
+			finish(&res, start)
+			return res
+		}
+		return runKnown(cfg, cmd, start, r, runSpec{
+			logical: "git push --porcelain",
+			exe:     "git.exe",
+			args:    []string{"-C", cfg.DispatcherWorkDir, "push", "--porcelain"},
+			dir:     cfg.DispatcherWorkDir,
+		})
+
 	case "dispatcher.test":
 		workDir, script, ok := dispatcherScript(cfg, &res, start)
 		if !ok {
@@ -313,7 +332,9 @@ func processOne(cfg Config, path string, r runner) error {
 		return archiveCommand(path, archiveDir, badID)
 	}
 
-	resultPath := filepath.Join(resultsDir, "RESULT__"+cmd.ID+".json")
+	resultPath := filepath.Join(resultsDir, "02_RESULTS", "RESULT__"+cmd.ID+".json")
+	_ = resultPath
+	resultPath = filepath.Join(resultsDir, "RESULT__"+cmd.ID+".json")
 	if _, err := os.Stat(resultPath); err == nil {
 		return archiveCommand(path, archiveDir, cmd.ID)
 	}
