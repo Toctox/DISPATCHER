@@ -18,9 +18,10 @@ MAX_BOOTSTRAP = 64 * 1024
 ACTIONS = frozenset({"PRECHECK", "NEW_CHAT", "INSERT_BOOTSTRAP", "SEND"})
 CONTROL = "RECEIPT_CONFIRMED"
 RECOVER = "RECOVER_PRE_SEND"
-# Internal bridge-to-extension control; never accepted directly from a worker.
+# Internal bridge-to-extension controls; never accepted directly from a worker.
 RECOVERY_RELEASE = "PRE_SEND_RECOVERY_RELEASE"
-CONTROLS = frozenset({CONTROL, RECOVER, RECOVERY_RELEASE})
+RECOVERY_RELEASE_BOOTSTRAP = "PRE_BOOTSTRAP_RECOVERY_RELEASE"
+CONTROLS = frozenset({CONTROL, RECOVER, RECOVERY_RELEASE, RECOVERY_RELEASE_BOOTSTRAP})
 CODES = frozenset(
     {
         "CHATGPT_BRIDGE_UNAVAILABLE",
