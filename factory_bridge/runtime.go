@@ -230,15 +230,46 @@ func compact(value string, max int) string {
 	return value[:max] + "...[truncated for panel]"
 }
 
+func panelStateKey(s PanelSnapshot) string {
+	// Heartbeat timestamp intentionally excluded: it changes every poll even when
+	// the visible bridge state is unchanged. ONLINE/OFFLINE still changes the key.
+	value := struct {
+		BridgeVersion  string
+		BridgeRoot     string
+		ExecutorOnline bool
+		ExecutorPID    int
+		PendingCount   int
+		LastCommand    *Command
+		LastResult     *Result
+	}{
+		BridgeVersion:  s.BridgeVersion,
+		BridgeRoot:     s.BridgeRoot,
+		ExecutorOnline: s.ExecutorOnline,
+		ExecutorPID:    s.ExecutorPID,
+		PendingCount:   s.PendingCount,
+		LastCommand:    s.LastCommand,
+		LastResult:     s.LastResult,
+	}
+	data, _ := json.Marshal(value)
+	return string(data)
+}
+
 func runPanel(cfg Config) error {
 	refresh := cfg.PollIntervalMs
 	if refresh < 500 {
 		refresh = 500
 	}
+	lastKey := ""
 	for {
-		// ANSI clear/home only affects this console. No shell or child process is invoked.
-		fmt.Print("\x1b[2J\x1b[H")
-		fmt.Print(renderPanel(panelSnapshot(cfg, time.Now())))
+		snapshot := panelSnapshot(cfg, time.Now())
+		key := panelStateKey(snapshot)
+		if key != lastKey {
+			if lastKey != "" {
+				fmt.Print("\n--- PANEL UPDATE ---\n")
+			}
+			fmt.Print(renderPanel(snapshot))
+			lastKey = key
+		}
 		time.Sleep(time.Duration(refresh) * time.Millisecond)
 	}
 }
