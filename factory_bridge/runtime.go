@@ -11,10 +11,15 @@ import (
 )
 
 const (
-	statusDirName          = "00_STATUS"
-	executorStatusFileName = "executor.json"
-	lastCommandFileName    = "last_command.json"
-	lastResultFileName     = "last_result.json"
+	statusDirName             = "00_STATUS"
+	executorStatusFileName    = "executor.json"
+	supervisorStatusFileName  = "supervisor.json"
+	lastCommandFileName       = "last_command.json"
+	lastResultFileName        = "last_result.json"
+	executorOnlineThreshold   = 30 * time.Second
+	executorStaleThreshold    = 90 * time.Second
+	supervisorOnlineThreshold = 30 * time.Second
+	supervisorStaleThreshold  = 90 * time.Second
 )
 
 type ExecutorStatus struct {
@@ -24,15 +29,32 @@ type ExecutorStatus struct {
 	HeartbeatAt   string `json:"heartbeatAt"`
 }
 
+type SupervisorStatus struct {
+	BridgeVersion       string `json:"bridgeVersion"`
+	PID                 int    `json:"pid"`
+	StartedAt           string `json:"startedAt"`
+	HeartbeatAt         string `json:"heartbeatAt"`
+	ExecutorPID         int    `json:"executorPid,omitempty"`
+	RestartCount        int    `json:"restartCount"`
+	LastExecutorStartAt string `json:"lastExecutorStartAt,omitempty"`
+	LastExecutorExitAt  string `json:"lastExecutorExitAt,omitempty"`
+	LastError           string `json:"lastError,omitempty"`
+}
+
 type PanelSnapshot struct {
-	BridgeVersion  string
-	BridgeRoot     string
-	ExecutorOnline bool
-	ExecutorPID    int
-	HeartbeatAt    string
-	PendingCount   int
-	LastCommand    *Command
-	LastResult     *Result
+	BridgeVersion      string
+	BridgeRoot         string
+	SupervisorState    string
+	SupervisorPID      int
+	SupervisorHeartbeat string
+	SupervisorRestarts int
+	ExecutorState      string
+	ExecutorOnline     bool
+	ExecutorPID        int
+	HeartbeatAt        string
+	PendingCount       int
+	LastCommand        *Command
+	LastResult         *Result
 }
 
 func ensureBridgeDirs(cfg Config) error {
@@ -143,18 +165,37 @@ func readJSONFile[T any](path string) (*T, error) {
 	return &value, nil
 }
 
+func heartbeatState(now time.Time, heartbeat string, onlineThreshold, staleThreshold time.Duration) string {
+	parsed, err := time.Parse(time.RFC3339Nano, heartbeat)
+	if err != nil {
+		return "OFFLINE"
+	}
+	age := now.Sub(parsed)
+	if age < 0 {
+		age = 0
+	}
+	if age <= onlineThreshold {
+		return "ONLINE"
+	}
+	if age <= staleThreshold {
+		return "STALE"
+	}
+	return "OFFLINE"
+}
+
 func panelSnapshot(cfg Config, now time.Time) PanelSnapshot {
-	s := PanelSnapshot{BridgeVersion: bridgeVersion, BridgeRoot: cfg.BridgeRoot}
+	s := PanelSnapshot{BridgeVersion: bridgeVersion, BridgeRoot: cfg.BridgeRoot, ExecutorState: "OFFLINE", SupervisorState: "OFFLINE"}
+	if state, err := readJSONFile[SupervisorStatus](statusPath(cfg, supervisorStatusFileName)); err == nil {
+		s.SupervisorPID = state.PID
+		s.SupervisorHeartbeat = state.HeartbeatAt
+		s.SupervisorRestarts = state.RestartCount
+		s.SupervisorState = heartbeatState(now, state.HeartbeatAt, supervisorOnlineThreshold, supervisorStaleThreshold)
+	}
 	if state, err := readJSONFile[ExecutorStatus](statusPath(cfg, executorStatusFileName)); err == nil {
 		s.ExecutorPID = state.PID
 		s.HeartbeatAt = state.HeartbeatAt
-		if heartbeat, err := time.Parse(time.RFC3339Nano, state.HeartbeatAt); err == nil {
-			onlineWindow := time.Duration(cfg.PollIntervalMs*4) * time.Millisecond
-			if onlineWindow < 4*time.Second {
-				onlineWindow = 4 * time.Second
-			}
-			s.ExecutorOnline = now.Sub(heartbeat) >= 0 && now.Sub(heartbeat) <= onlineWindow
-		}
+		s.ExecutorState = heartbeatState(now, state.HeartbeatAt, executorOnlineThreshold, executorStaleThreshold)
+		s.ExecutorOnline = s.ExecutorState == "ONLINE"
 	}
 	if cmd, err := readJSONFile[Command](statusPath(cfg, lastCommandFileName)); err == nil {
 		s.LastCommand = cmd
@@ -173,19 +214,21 @@ func panelSnapshot(cfg Config, now time.Time) PanelSnapshot {
 }
 
 func renderPanel(s PanelSnapshot) string {
-	online := "OFFLINE"
-	if s.ExecutorOnline {
-		online = "ONLINE"
-	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "FACTORY BRIDGE %s - READ ONLY PANEL\n", s.BridgeVersion)
 	fmt.Fprintf(&b, "Bridge root: %s\n", s.BridgeRoot)
-	fmt.Fprintf(&b, "Executor: %s", online)
+	fmt.Fprintf(&b, "Supervisor: %s", s.SupervisorState)
+	if s.SupervisorPID != 0 {
+		fmt.Fprintf(&b, " (pid=%d restarts=%d)", s.SupervisorPID, s.SupervisorRestarts)
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "Supervisor heartbeat: %s\n", valueOrDash(s.SupervisorHeartbeat))
+	fmt.Fprintf(&b, "Executor: %s", s.ExecutorState)
 	if s.ExecutorPID != 0 {
 		fmt.Fprintf(&b, " (pid=%d)", s.ExecutorPID)
 	}
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "Heartbeat: %s\n", valueOrDash(s.HeartbeatAt))
+	fmt.Fprintf(&b, "Executor heartbeat: %s\n", valueOrDash(s.HeartbeatAt))
 	fmt.Fprintf(&b, "Pending commands: %d\n", s.PendingCount)
 	b.WriteString("\nLAST COMMAND\n")
 	if s.LastCommand == nil {
@@ -231,24 +274,28 @@ func compact(value string, max int) string {
 }
 
 func panelStateKey(s PanelSnapshot) string {
-	// Heartbeat timestamp intentionally excluded: it changes every poll even when
-	// the visible bridge state is unchanged. ONLINE/OFFLINE still changes the key.
 	value := struct {
-		BridgeVersion  string
-		BridgeRoot     string
-		ExecutorOnline bool
-		ExecutorPID    int
-		PendingCount   int
-		LastCommand    *Command
-		LastResult     *Result
+		BridgeVersion      string
+		BridgeRoot         string
+		SupervisorState    string
+		SupervisorPID      int
+		SupervisorRestarts int
+		ExecutorState      string
+		ExecutorPID        int
+		PendingCount       int
+		LastCommand        *Command
+		LastResult         *Result
 	}{
-		BridgeVersion:  s.BridgeVersion,
-		BridgeRoot:     s.BridgeRoot,
-		ExecutorOnline: s.ExecutorOnline,
-		ExecutorPID:    s.ExecutorPID,
-		PendingCount:   s.PendingCount,
-		LastCommand:    s.LastCommand,
-		LastResult:     s.LastResult,
+		BridgeVersion:      s.BridgeVersion,
+		BridgeRoot:         s.BridgeRoot,
+		SupervisorState:    s.SupervisorState,
+		SupervisorPID:      s.SupervisorPID,
+		SupervisorRestarts: s.SupervisorRestarts,
+		ExecutorState:      s.ExecutorState,
+		ExecutorPID:        s.ExecutorPID,
+		PendingCount:       s.PendingCount,
+		LastCommand:        s.LastCommand,
+		LastResult:         s.LastResult,
 	}
 	data, _ := json.Marshal(value)
 	return string(data)
