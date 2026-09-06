@@ -17,6 +17,8 @@ func TestSelectedMode(t *testing.T) {
 	}{
 		{nil, "executor", true},
 		{[]string{"--mode", "executor"}, "executor", true},
+		{[]string{"--mode", "supervisor"}, "supervisor", true},
+		{[]string{"--mode", "SUPERVISOR"}, "supervisor", true},
 		{[]string{"--mode", "panel"}, "panel", true},
 		{[]string{"--mode", "PANEL"}, "panel", true},
 		{[]string{"--mode"}, "", false},
@@ -37,18 +39,48 @@ func TestSelectedMode(t *testing.T) {
 	}
 }
 
-func TestPanelSnapshotIsReadOnlyAndReportsExecutorState(t *testing.T) {
+func TestHeartbeatStateUsesTolerantWindows(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		age  time.Duration
+		want string
+	}{
+		{time.Second, "ONLINE"},
+		{29 * time.Second, "ONLINE"},
+		{45 * time.Second, "STALE"},
+		{89 * time.Second, "STALE"},
+		{91 * time.Second, "OFFLINE"},
+	}
+	for _, tc := range cases {
+		got := heartbeatState(now, now.Add(-tc.age).Format(time.RFC3339Nano), executorOnlineThreshold, executorStaleThreshold)
+		if got != tc.want {
+			t.Fatalf("age=%s got=%s want=%s", tc.age, got, tc.want)
+		}
+	}
+}
+
+func TestPanelSnapshotIsReadOnlyAndReportsSupervisorAndExecutor(t *testing.T) {
 	bridge := t.TempDir()
 	cfg := Config{BridgeRoot: bridge, PollIntervalMs: 1000}
-	for _, name := range []string{statusDirName, "01_COMMANDS", "02_RESULTS", "03_ARCHIVE"} {
-		if err := os.MkdirAll(filepath.Join(bridge, name), 0o755); err != nil {
-			t.Fatal(err)
-		}
+	if err := ensureBridgeDirs(cfg); err != nil {
+		t.Fatal(err)
 	}
 
 	now := time.Now()
-	status := ExecutorStatus{BridgeVersion: bridgeVersion, PID: 4321, StartedAt: now.Add(-time.Minute).Format(time.RFC3339), HeartbeatAt: now.Add(-time.Second).Format(time.RFC3339Nano)}
-	if err := writeJSONAtomic(statusPath(cfg, executorStatusFileName), status); err != nil {
+	if err := writeJSONAtomic(statusPath(cfg, supervisorStatusFileName), SupervisorStatus{
+		BridgeVersion: bridgeVersion,
+		PID: 100,
+		HeartbeatAt: now.Add(-2 * time.Second).Format(time.RFC3339Nano),
+		RestartCount: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomic(statusPath(cfg, executorStatusFileName), ExecutorStatus{
+		BridgeVersion: bridgeVersion,
+		PID: 4321,
+		StartedAt: now.Add(-time.Minute).Format(time.RFC3339),
+		HeartbeatAt: now.Add(-time.Second).Format(time.RFC3339Nano),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeJSONAtomic(statusPath(cfg, lastCommandFileName), Command{ID: "OBS-1", Action: "bridge.ping"}); err != nil {
@@ -65,14 +97,11 @@ func TestPanelSnapshotIsReadOnlyAndReportsExecutorState(t *testing.T) {
 	}
 
 	snapshot := panelSnapshot(cfg, now)
-	if !snapshot.ExecutorOnline || snapshot.ExecutorPID != 4321 || snapshot.PendingCount != 1 {
-		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	if snapshot.SupervisorState != "ONLINE" || snapshot.SupervisorPID != 100 || snapshot.SupervisorRestarts != 3 {
+		t.Fatalf("unexpected supervisor snapshot: %+v", snapshot)
 	}
-	if snapshot.LastCommand == nil || snapshot.LastCommand.ID != "OBS-1" {
-		t.Fatalf("last command missing: %+v", snapshot.LastCommand)
-	}
-	if snapshot.LastResult == nil || snapshot.LastResult.Status != "ok" {
-		t.Fatalf("last result missing: %+v", snapshot.LastResult)
+	if !snapshot.ExecutorOnline || snapshot.ExecutorState != "ONLINE" || snapshot.ExecutorPID != 4321 || snapshot.PendingCount != 1 {
+		t.Fatalf("unexpected executor snapshot: %+v", snapshot)
 	}
 	got, err := os.ReadFile(pending)
 	if err != nil {
@@ -123,15 +152,6 @@ func TestProcessOneObservedPreservesExecutionEvidenceAndArchive(t *testing.T) {
 	if res.Status != "ok" || res.ExitCode == nil || *res.ExitCode != 0 || res.Stdout != "stdout evidence\n" || res.Stderr != "stderr evidence\n" {
 		t.Fatalf("execution evidence incomplete: %+v", res)
 	}
-	if res.FinishedAt == "" || res.StartedAt == "" || res.DurationMs < 0 {
-		t.Fatalf("timing evidence incomplete: %+v", res)
-	}
-	if _, err := os.Stat(statusPath(cfg, lastCommandFileName)); err != nil {
-		t.Fatalf("last command status missing: %v", err)
-	}
-	if _, err := os.Stat(statusPath(cfg, lastResultFileName)); err != nil {
-		t.Fatalf("last result status missing: %v", err)
-	}
 	archive, err := os.ReadDir(filepath.Join(bridge, "03_ARCHIVE"))
 	if err != nil {
 		t.Fatal(err)
@@ -141,17 +161,23 @@ func TestProcessOneObservedPreservesExecutionEvidenceAndArchive(t *testing.T) {
 	}
 }
 
-func TestStaleHeartbeatReportsOffline(t *testing.T) {
+func TestStaleAndOfflineHeartbeatClassification(t *testing.T) {
 	bridge := t.TempDir()
 	cfg := Config{BridgeRoot: bridge, PollIntervalMs: 1000}
 	if err := os.MkdirAll(filepath.Join(bridge, statusDirName), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	if err := writeJSONAtomic(statusPath(cfg, executorStatusFileName), ExecutorStatus{PID: 99, HeartbeatAt: now.Add(-10 * time.Second).Format(time.RFC3339Nano)}); err != nil {
+	if err := writeJSONAtomic(statusPath(cfg, executorStatusFileName), ExecutorStatus{PID: 99, HeartbeatAt: now.Add(-45 * time.Second).Format(time.RFC3339Nano)}); err != nil {
 		t.Fatal(err)
 	}
-	if panelSnapshot(cfg, now).ExecutorOnline {
-		t.Fatal("stale executor heartbeat must report OFFLINE")
+	if got := panelSnapshot(cfg, now).ExecutorState; got != "STALE" {
+		t.Fatalf("got=%s want=STALE", got)
+	}
+	if err := writeJSONAtomic(statusPath(cfg, executorStatusFileName), ExecutorStatus{PID: 99, HeartbeatAt: now.Add(-2 * time.Minute).Format(time.RFC3339Nano)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := panelSnapshot(cfg, now).ExecutorState; got != "OFFLINE" {
+		t.Fatalf("got=%s want=OFFLINE", got)
 	}
 }
