@@ -1,6 +1,7 @@
 const status = document.getElementById("status");
 const factoryMessage = document.getElementById("factory-message");
 const choice = document.getElementById("factory-tab-choice");
+const domDiagnostic = document.getElementById("dom-diagnostic");
 async function factoryRequest(action, fields = {}) {
   const value = await chrome.runtime.sendMessage({type: "FACTORY_TAB_OPTIONS", action, ...fields});
   if (value?.status !== "OK") throw new Error(value?.errorCode || "CHATGPT_BRIDGE_UNAVAILABLE");
@@ -15,6 +16,7 @@ async function refreshFactoryStatus() {
   document.getElementById("factory-reserved").textContent = value.reserved ? "yes" : "no";
   document.getElementById("register-factory-tab").disabled = value.reserved;
   document.getElementById("clear-factory-tab").disabled = value.reserved;
+  document.getElementById("diagnose-factory-tab").disabled = value.reserved || !value.configured;
   factoryMessage.textContent = value.errorCode || "";
 }
 async function refreshFactoryTabs() {
@@ -29,7 +31,7 @@ async function refreshFactoryTabs() {
     option.textContent = `Tab ID ${tab.factoryTabId} — janela ${tab.windowId}, posição ${tab.position}`;
     choice.append(option);
   }
-  choice.value = ""; // Explicit choice every time, including when only one tab exists.
+  choice.value = "";
   await refreshFactoryStatus();
 }
 async function factoryUI(operation) {
@@ -45,10 +47,17 @@ document.getElementById("factory-tab-form").addEventListener("submit", event => 
   });
 });
 document.getElementById("clear-factory-tab").addEventListener("click", () => {
-  void factoryUI(async () => { await factoryRequest("CLEAR"); await refreshFactoryStatus(); });
+  void factoryUI(async () => { await factoryRequest("CLEAR"); domDiagnostic.textContent = ""; await refreshFactoryStatus(); });
 });
 document.getElementById("refresh-factory-tabs").addEventListener("click", () => {
   void factoryUI(refreshFactoryTabs);
+});
+document.getElementById("diagnose-factory-tab").addEventListener("click", () => {
+  void factoryUI(async () => {
+    const value = await factoryRequest("DIAGNOSE");
+    domDiagnostic.textContent = JSON.stringify(value.diagnostic, null, 2);
+    factoryMessage.textContent = "DOM_DIAGNOSTIC_OK";
+  });
 });
 document.getElementById("extension-id").textContent = chrome.runtime.id;
 await chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
