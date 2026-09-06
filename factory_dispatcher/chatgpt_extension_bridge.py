@@ -108,6 +108,17 @@ class Bridge:
         )
         return role
 
+    async def wait_for_extension(self, timeout=5.0):
+        """Wait only before forwarding a new RPC; never replay an RPC after send."""
+        if self.extension is not None:
+            return
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while self.extension is None and loop.time() < deadline:
+            await asyncio.sleep(0.05)
+        if self.extension is None:
+            fail(self.extension_error)
+
     async def relay(self, request):
         command(request)
         if operation(request) in {RECOVERY_RELEASE, RECOVERY_RELEASE_BOOTSTRAP}:
@@ -117,6 +128,9 @@ class Bridge:
         if self.rpc_lock.locked():
             fail("CHATGPT_TAB_BUSY")
         async with self.rpc_lock:
+            # A service-worker transport reconnect is harmless before a new command is sent.
+            # Once exchange() starts, any lost ACK remains ambiguous and is never retried.
+            await self.wait_for_extension()
             if operation(request) == RECOVER:
                 from .chatgpt_extension_recovery import recover_reservation
 
@@ -127,9 +141,6 @@ class Bridge:
                     "requestId": request["requestId"],
                     "status": "OK",
                 }
-            extension = self.extension
-            if extension is None:
-                fail(self.extension_error)
             self.reservation.before(request)
             response = await self.exchange(request)
             if response["status"] == "OK":
