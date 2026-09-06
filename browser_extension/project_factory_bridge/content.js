@@ -6,6 +6,7 @@
   let busy = false;
   let allowedNewChatNavigation = false;
   const fail = code => { throw new Error(code); };
+  const isNewChatPath = pathname => pathname === "/" || /^\/[A-Za-z]{2}(?:-[A-Za-z]{2})?\/$/.test(pathname);
   function invalidateBinding() {
     documentId = crypto.randomUUID();
     phase = "BINDING_CHANGED";
@@ -22,7 +23,7 @@
       }
       if (allowedNewChatNavigation && phase === "NEW_CHAT_ATTEMPTED" &&
           event.destination.sameDocument && destination.origin === "https://chatgpt.com" &&
-          destination.pathname === "/" && !destination.search && !destination.hash &&
+          isNewChatPath(destination.pathname) && !destination.search && !destination.hash &&
           ["push", "replace"].includes(event.navigationType)) {
         allowedNewChatNavigation = false;
         return;
@@ -113,7 +114,7 @@
         reservationId = value.reservationId;
         phase = "NEW_CHAT_ATTEMPTED";
         expectedBootstrap = null;
-        if (location.pathname === "/" && !location.search && !location.hash &&
+        if (isNewChatPath(location.pathname) && !location.search && !location.hash &&
             PFComposer.read(control("composer")) === "") {
           phase = "NEW_CHAT";
           return {status: "OK"};
@@ -124,7 +125,7 @@
         while (Date.now() < deadline) {
           requireBinding(value);
           try {
-            if (location.pathname === "/" && PFComposer.read(control("composer")) === "") {
+            if (isNewChatPath(location.pathname) && PFComposer.read(control("composer")) === "") {
               phase = "NEW_CHAT";
               allowedNewChatNavigation = false;
               return {status: "OK"};
