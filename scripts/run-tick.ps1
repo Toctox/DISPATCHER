@@ -16,6 +16,41 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     throw "Configuration not found: $configPath"
 }
 
+function Test-LoopbackPort {
+    param([int]$Port)
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $pending = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+        if (-not $pending.AsyncWaitHandle.WaitOne(350)) { return $false }
+        $client.EndConnect($pending)
+        return $true
+    }
+    catch { return $false }
+    finally { $client.Close() }
+}
+
+function Ensure-ChatGptExtensionBridge {
+    param([string]$ProjectPath,[string]$PythonPath,[string]$ConfigPath)
+    $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+    if ([string]$config.chatGptBrowserMode -ne 'EXTENSION_BRIDGE' -or
+        -not [bool]$config.chatGptExtensionBridgeEnabled) { return }
+    $port = [int]$config.chatGptExtensionBridgePort
+    if ($port -lt 1 -or $port -gt 65535) { throw 'Invalid ChatGPT extension bridge port.' }
+    if (Test-LoopbackPort -Port $port) { return }
+
+    $configArgument = '"' + $ConfigPath + '"'
+    Start-Process -FilePath $PythonPath `
+        -ArgumentList @('-m','factory_dispatcher.chatgpt_extension_bridge','--config',$configArgument) `
+        -WorkingDirectory $ProjectPath `
+        -WindowStyle Hidden | Out-Null
+
+    for ($attempt = 0; $attempt -lt 24; $attempt++) {
+        Start-Sleep -Milliseconds 250
+        if (Test-LoopbackPort -Port $port) { return }
+    }
+    throw 'ChatGPT extension bridge did not become available.'
+}
+
 function Write-ChatGptBridgeDiagnostic {
     param([string]$ProjectPath)
     try {
@@ -83,6 +118,7 @@ if ($DryRun) {
 
 Push-Location -LiteralPath $projectPath
 try {
+    Ensure-ChatGptExtensionBridge -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath
     Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath
     if ($DryRun) {
         Write-LatestChatGptWorkerDiagnostic -ProjectPath $projectPath
