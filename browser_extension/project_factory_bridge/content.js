@@ -67,6 +67,16 @@
         reservationId = value.reservationId;
         phase = "NEW_CHAT_ATTEMPTED";
         expectedBootstrap = null;
+        // A dedicated Factory Tab is normally registered while already on the pristine
+        // new-chat surface. Do not manufacture a navigation in that state: live ChatGPT
+        // may implement the New Chat control as a full-document transition, which would
+        // correctly invalidate the pinned documentId before any bootstrap can be inserted.
+        // Root + empty composer is sufficient mechanical evidence that no reset is needed.
+        if (location.pathname === "/" && !location.search && !location.hash &&
+            PFComposer.read(control("composer")) === "") {
+          phase = "NEW_CHAT";
+          return {status: "OK"};
+        }
         allowedNewChatNavigation = true;
         control("newChat").click();
         const deadline = Date.now() + 10000;
