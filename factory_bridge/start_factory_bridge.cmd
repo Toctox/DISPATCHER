@@ -18,17 +18,17 @@ if not exist "%CFG%" (
 )
 
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$p='%CFG%'; $c=Get-Content -LiteralPath $p -Raw | ConvertFrom-Json; $c | Add-Member -NotePropertyName allowGitPull -NotePropertyValue $true -Force; $c | Add-Member -NotePropertyName allowGitPush -NotePropertyValue $true -Force; $c | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $p -Encoding UTF8"
+  "$p='%CFG%'; $c=Get-Content -LiteralPath $p -Raw | ConvertFrom-Json; $c | Add-Member -NotePropertyName allowGitPull -NotePropertyValue $true -Force; $c | Add-Member -NotePropertyName allowGitPush -NotePropertyValue $true -Force; $json=$c | ConvertTo-Json -Depth 10; [System.IO.File]::WriteAllText($p,$json,(New-Object System.Text.UTF8Encoding($false)))"
 if errorlevel 1 (
   echo Failed to update Git permissions in config.
   exit /b 1
 )
 
-rem Ensure the old executor cannot race the new executor.
+rem Ensure legacy direct executors cannot race the supervised executor.
 taskkill /IM FactoryBridge.exe /F >nul 2>&1
 taskkill /IM FactoryBridge-0.4.0.exe /F >nul 2>&1
 
-start "FactoryBridge Executor" cmd /k ""%EXE%" --mode executor"
+start "FactoryBridge Supervisor" cmd /k ""%EXE%" --mode supervisor"
 start "FactoryBridge Panel" cmd /k ""%EXE%" --mode panel"
 
 endlocal
