@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from contextlib import ExitStack
 
+from test_chatgpt_extension import extension_case as extension_case
+from test_chatgpt_extension import extension_settings as extension_settings
 from test_chatgpt_extension_recovery import recovery_case as recovery_case
 
 from factory_dispatcher import chatgpt_extension_recovery as recovery
