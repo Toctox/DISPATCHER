@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const bridgeVersion = "0.4.0"
+const bridgeVersion = "0.5.0"
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
@@ -332,9 +332,7 @@ func processOne(cfg Config, path string, r runner) error {
 		return archiveCommand(path, archiveDir, badID)
 	}
 
-	resultPath := filepath.Join(resultsDir, "02_RESULTS", "RESULT__"+cmd.ID+".json")
-	_ = resultPath
-	resultPath = filepath.Join(resultsDir, "RESULT__"+cmd.ID+".json")
+	resultPath := filepath.Join(resultsDir, "RESULT__"+cmd.ID+".json")
 	if _, err := os.Stat(resultPath); err == nil {
 		return archiveCommand(path, archiveDir, cmd.ID)
 	}
@@ -383,7 +381,7 @@ func selectedMode(args []string) (string, error) {
 		switch args[i] {
 		case "--mode":
 			if i+1 >= len(args) {
-				return "", errors.New("--mode requires executor or panel")
+				return "", errors.New("--mode requires executor, supervisor, or panel")
 			}
 			i++
 			mode = strings.ToLower(strings.TrimSpace(args[i]))
@@ -391,8 +389,8 @@ func selectedMode(args []string) (string, error) {
 			return "", fmt.Errorf("unsupported argument: %s", args[i])
 		}
 	}
-	if mode != "executor" && mode != "panel" {
-		return "", errors.New("--mode must be executor or panel")
+	if mode != "executor" && mode != "supervisor" && mode != "panel" {
+		return "", errors.New("--mode must be executor, supervisor, or panel")
 	}
 	return mode, nil
 }
@@ -413,15 +411,21 @@ func main() {
 		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
 		os.Exit(2)
 	}
-	if mode == "panel" {
+	switch mode {
+	case "panel":
 		if err := runPanel(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "panel error: %v\n", err)
 			os.Exit(2)
 		}
-		return
-	}
-	if err := runExecutor(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "executor error: %v\n", err)
-		os.Exit(2)
+	case "supervisor":
+		if err := runSupervisor(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "supervisor error: %v\n", err)
+			os.Exit(2)
+		}
+	default:
+		if err := runExecutor(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "executor error: %v\n", err)
+			os.Exit(2)
+		}
 	}
 }
