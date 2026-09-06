@@ -8,6 +8,7 @@ $projectPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $pythonPath = Join-Path $projectPath '.venv\Scripts\python.exe'
 $dispatcherPath = Join-Path $projectPath 'dispatcher.py'
 $configPath = Join-Path $projectPath 'config.json'
+$domProbePath = Join-Path $projectPath 'scripts\probe_chatgpt_dom.py'
 
 if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
     throw "Virtual environment not found: $pythonPath"
@@ -17,116 +18,45 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
 }
 
 function Write-ChatGptBridgeDiagnostic {
-    param(
-        [string]$ProjectPath,
-        [string]$ConfigPath
-    )
-
+    param([string]$ProjectPath)
     try {
-        $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
-        $stateSetting = [string]$config.stateDirectory
-        if ([string]::IsNullOrWhiteSpace($stateSetting)) {
-            $stateSetting = 'state'
-        }
-        if ([System.IO.Path]::IsPathRooted($stateSetting)) {
-            $statePath = [System.IO.Path]::GetFullPath($stateSetting)
-        }
-        else {
-            $statePath = [System.IO.Path]::GetFullPath((Join-Path $ProjectPath $stateSetting))
-        }
-
         $reservationPath = Join-Path $ProjectPath 'state\chatgpt-bridge\reservation.json'
         if (-not (Test-Path -LiteralPath $reservationPath -PathType Leaf)) {
-            $payload = [ordered]@{
-                kind = 'CHATGPT_BRIDGE_DIAGNOSTIC'
-                reservation = 'NONE'
-            }
-            [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
+            [Console]::Error.WriteLine('{"kind":"CHATGPT_BRIDGE_DIAGNOSTIC","reservation":"NONE"}')
             return
         }
-
         $reservation = Get-Content -LiteralPath $reservationPath -Raw | ConvertFrom-Json
-        $reservationId = [string]$reservation.reservationId
-        if ([string]::IsNullOrWhiteSpace($reservationId)) {
-            $payload = [ordered]@{
-                kind = 'CHATGPT_BRIDGE_DIAGNOSTIC'
-                reservation = 'NONE'
-            }
-            [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
+        if ([string]::IsNullOrWhiteSpace([string]$reservation.reservationId)) {
+            [Console]::Error.WriteLine('{"kind":"CHATGPT_BRIDGE_DIAGNOSTIC","reservation":"NONE"}')
             return
-        }
-
-        $dispatchId = $null
-        $attemptId = $null
-        $workerState = $null
-        $errorCode = $null
-        $sendAttempted = $null
-        $operationalSuccess = $null
-        $needsReconciliation = $null
-        $launchMatched = $false
-        $runsPath = Join-Path $statePath 'chatgpt-runs'
-
-        if (Test-Path -LiteralPath $runsPath -PathType Container) {
-            foreach ($launchPath in Get-ChildItem -LiteralPath $runsPath -Filter 'launch.json' -File -Recurse -ErrorAction SilentlyContinue) {
-                try {
-                    $launch = Get-Content -LiteralPath $launchPath.FullName -Raw | ConvertFrom-Json
-                    if ([string]$launch.reservationId -ne $reservationId) {
-                        continue
-                    }
-                    $launchMatched = $true
-                    $dispatchId = [string]$launch.execution.dispatchId
-                    $attemptId = [string]$launch.execution.attemptId
-                    $statusPath = Join-Path $launchPath.Directory.FullName 'status.json'
-                    if (Test-Path -LiteralPath $statusPath -PathType Leaf) {
-                        $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
-                        $workerState = [string]$status.state
-                        $errorCode = [string]$status.errorCode
-                        if ($null -ne $status.sendAttempted) {
-                            $sendAttempted = [bool]$status.sendAttempted
-                        }
-                        if ($null -ne $status.operationalSuccess) {
-                            $operationalSuccess = [bool]$status.operationalSuccess
-                        }
-                        if ($null -ne $status.needsReconciliation) {
-                            $needsReconciliation = [bool]$status.needsReconciliation
-                        }
-                    }
-                    break
-                }
-                catch {
-                    # Diagnostics must never mutate state or prevent the canonical tick.
-                }
-            }
-        }
-
-        $tabId = $null
-        if ($null -ne $reservation.binding -and $null -ne $reservation.binding.tabId) {
-            $tabId = $reservation.binding.tabId
         }
         $payload = [ordered]@{
             kind = 'CHATGPT_BRIDGE_DIAGNOSTIC'
             reservation = 'ACTIVE'
-            reservationId = $reservationId
+            reservationId = [string]$reservation.reservationId
             phase = [string]$reservation.phase
-            tabId = $tabId
-            launchMatched = $launchMatched
-            dispatchId = $dispatchId
-            attemptId = $attemptId
-            workerState = $workerState
-            errorCode = $errorCode
-            sendAttempted = $sendAttempted
-            operationalSuccess = $operationalSuccess
-            needsReconciliation = $needsReconciliation
         }
         [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
     }
     catch {
-        $payload = [ordered]@{
-            kind = 'CHATGPT_BRIDGE_DIAGNOSTIC'
-            reservation = 'UNKNOWN'
-            diagnosticError = $_.Exception.GetType().Name
+        [Console]::Error.WriteLine('{"kind":"CHATGPT_BRIDGE_DIAGNOSTIC","reservation":"UNKNOWN"}')
+    }
+}
+
+function Write-ChatGptDomDiagnostic {
+    param([string]$PythonPath,[string]$ProbePath,[string]$ConfigPath)
+    if (-not (Test-Path -LiteralPath $ProbePath -PathType Leaf)) {
+        [Console]::Error.WriteLine('{"kind":"CHATGPT_DOM_DIAGNOSTIC","outcome":"PROBE_MISSING"}')
+        return
+    }
+    try {
+        $lines = & $PythonPath $ProbePath --config $ConfigPath 2>&1
+        foreach ($line in $lines) {
+            [Console]::Error.WriteLine([string]$line)
         }
-        [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
+    }
+    catch {
+        [Console]::Error.WriteLine('{"kind":"CHATGPT_DOM_DIAGNOSTIC","outcome":"PROBE_FAILED"}')
     }
 }
 
@@ -137,7 +67,10 @@ if ($DryRun) {
 
 Push-Location -LiteralPath $projectPath
 try {
-    Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath -ConfigPath $configPath
+    Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath
+    if ($DryRun) {
+        Write-ChatGptDomDiagnostic -PythonPath $pythonPath -ProbePath $domProbePath -ConfigPath $configPath
+    }
     & $pythonPath @dispatcherArguments
     exit $LASTEXITCODE
 }
