@@ -1,0 +1,49 @@
+name: DispatcherPython
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'factory_dispatcher/**'
+      - 'scripts/**'
+      - 'tests/test_chatgpt_extension.py'
+      - 'requirements*.txt'
+      - '.github/workflows/dispatcher-python.yml'
+  pull_request:
+    paths:
+      - 'factory_dispatcher/**'
+      - 'scripts/**'
+      - 'tests/test_chatgpt_extension.py'
+      - 'requirements*.txt'
+      - '.github/workflows/dispatcher-python.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install extension bridge test dependencies
+        run: python -m pip install -r requirements-extension.txt pytest
+      - name: Parse run-tick PowerShell
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/run-tick.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+      - name: Extension bridge Python tests
+        run: python -m pytest tests/test_chatgpt_extension.py -q
