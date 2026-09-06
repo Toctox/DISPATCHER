@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>PROJECT FACTORY BRIDGE — Pairing</title></head>
+<body>
+  <h1>PROJECT FACTORY BRIDGE</h1>
+  <p>Extension ID: <output id="extension-id"></output></p>
+  <section aria-labelledby="factory-tab-heading">
+    <h2 id="factory-tab-heading">PROJECT FACTORY TAB</h2>
+    <p>Bridge: <output id="bridge-status">DISCONNECTED</output></p>
+    <p>Factory tab: <output id="factory-status">NOT CONFIGURED</output></p>
+    <p>Tab ID: <output id="factory-tab-id">—</output></p>
+    <p>Origin valid: <output id="factory-origin-valid">no</output></p>
+    <p>Reserva ativa: <output id="factory-reserved">no</output></p>
+    <p>Abra uma aba ChatGPT dedicada. Escolha explicitamente seu Tab ID abaixo;
+      as outras abas continuam exclusivas do operador. Nenhuma aba é escolhida automaticamente.</p>
+    <form id="factory-tab-form">
+      <label>Aba ChatGPT elegível <select id="factory-tab-choice" required>
+        <option value="">Selecione uma aba por Tab ID</option>
+      </select></label>
+      <button id="register-factory-tab" type="submit">Registrar aba selecionada como PROJECT FACTORY TAB</button>
+    </form>
+    <p><button id="refresh-factory-tabs" type="button">Atualizar lista e status</button>
+      <button id="clear-factory-tab" type="button">Limpar Factory Tab</button></p>
+    <p><output id="factory-message" aria-live="polite"></output></p>
+    <p>A lista mostra Tab ID, janela e posição da aba naquela janela, sem títulos ou URLs
+      de conversas. A posição serve só para identificação visual; o registro usa o Tab ID.</p>
+  </section>
+  <p>Destino fixo: 127.0.0.1. Copie somente extensionSecret do arquivo local de pairing.</p>
+  <p>Nunca informe controlSecret. Nenhum segredo será exibido após salvar.</p>
+  <form id="pairing-form">
+    <p><label>Porta <input id="port" type="number" min="1" max="65535" value="8765" required></label></p>
+    <p><label>extensionSecret <input id="secret" type="password" autocomplete="off" required pattern="[0-9a-f]{64}"></label></p>
+    <button type="submit">Salvar pairing e conectar</button>
+  </form>
+  <p><output id="status" aria-live="polite"></output></p>
+  <p>Uma reserva pendente bloqueia outro dispatch e limpar/substituir a Factory Tab,
+    inclusive após reiniciar o Chrome.
+    Não apague o storage para tentar novamente: reconcilie o receipt primeiro.</p>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

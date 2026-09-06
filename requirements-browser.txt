@@ -1,0 +1,3 @@
+# Optional. Uses an existing Chrome/Edge; no playwright install/browser download required.
+-r requirements.txt
+playwright>=1.60,<2

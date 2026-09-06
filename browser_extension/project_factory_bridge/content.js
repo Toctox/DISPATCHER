@@ -1,0 +1,124 @@
+(() => {
+  let documentId = crypto.randomUUID();
+  let reservationId = null;
+  let phase = "IDLE";
+  let expectedBootstrap = null;
+  let busy = false;
+  let allowedNewChatNavigation = false;
+  const fail = code => { throw new Error(code); };
+  function invalidateBinding() {
+    documentId = crypto.randomUUID();
+    phase = "BINDING_CHANGED";
+    expectedBootstrap = null;
+    allowedNewChatNavigation = false;
+  }
+  const navigationSupported = typeof globalThis.navigation?.addEventListener === "function";
+  if (navigationSupported) {
+    navigation.addEventListener("navigate", event => {
+      // Observe navigation metadata only. Do not intercept, cancel, or inspect conversation DOM.
+      const destination = new URL(event.destination.url);
+      if (allowedNewChatNavigation && phase === "NEW_CHAT_ATTEMPTED" &&
+          event.destination.sameDocument && destination.origin === "https://chatgpt.com" &&
+          destination.pathname === "/" && !destination.search && !destination.hash &&
+          ["push", "replace"].includes(event.navigationType)) {
+        allowedNewChatNavigation = false;
+        return;
+      }
+      invalidateBinding();
+    });
+  }
+  addEventListener("pagehide", invalidateBinding);
+  function requireBinding(value) {
+    if (value.documentId !== documentId) fail("CHATGPT_BINDING_CHANGED");
+  }
+  const {candidates} = PFSelection;
+  function control(kind) {
+    const found = candidates(kind);
+    // Actions require one usable target, never an arbitrary first raw match.
+    if (found.length !== 1) {
+      fail("CHATGPT_SELECTOR_UNAVAILABLE");
+    }
+    return found[0];
+  }
+  function precheck() {
+    if (!navigationSupported) fail("CHATGPT_FACTORY_TAB_INVALID");
+    // Account controls are evidence, not action targets: more than one is legitimate.
+    if (location.origin !== "https://chatgpt.com" || candidates("login").length > 0 ||
+        candidates("account").length < 1) fail("CHATGPT_AUTH_REQUIRED");
+    control("newChat");
+    control("composer");
+  }
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  async function execute(value) {
+    if (busy) fail("CHATGPT_TAB_BUSY");
+    busy = true;
+    try {
+      if (!value || !["PRECHECK", "NEW_CHAT", "INSERT_BOOTSTRAP", "SEND"].includes(value.action)) {
+        fail("CHATGPT_PROTOCOL_INVALID");
+      }
+      if (value.action === "PRECHECK") {
+        precheck();
+        return {status: "OK", documentId, capability: "FACTORY_TAB_V1"};
+      }
+      requireBinding(value);
+      if (value.action === "NEW_CHAT") {
+        // Persistent dispatch exclusion is owned by the extension controller.
+        precheck();
+        reservationId = value.reservationId;
+        phase = "NEW_CHAT_ATTEMPTED";
+        expectedBootstrap = null;
+        allowedNewChatNavigation = true;
+        control("newChat").click();
+        const deadline = Date.now() + 10000;
+        while (Date.now() < deadline) {
+          requireBinding(value);
+          try {
+            if (location.pathname === "/" && PFComposer.read(control("composer")) === "") {
+              phase = "NEW_CHAT";
+              allowedNewChatNavigation = false;
+              return {status: "OK"};
+            }
+          } catch (error) {
+            // SPA rendering can temporarily replace the composer. Never inspect other DOM.
+            if (error.message !== "CHATGPT_SELECTOR_UNAVAILABLE") throw error;
+          }
+          await delay(100);
+        }
+        fail("CHATGPT_NEW_CHAT_FAILED");
+      }
+      if (value.reservationId !== reservationId) fail("CHATGPT_RESERVATION_INVALID");
+      if (value.action === "INSERT_BOOTSTRAP") {
+        if (phase !== "NEW_CHAT") fail("CHATGPT_RESERVATION_INVALID");
+        phase = "INSERT_BOOTSTRAP_ATTEMPTED";
+        PFComposer.insert(control("composer"), value.bootstrap);
+        // Allow React's render to settle, then read only the composer again.
+        await delay(100);
+        requireBinding(value);
+        if (PFComposer.read(control("composer")) !== value.bootstrap) fail("CHATGPT_BOOTSTRAP_MISMATCH");
+        expectedBootstrap = value.bootstrap;
+        phase = "INSERT_BOOTSTRAP";
+        return {status: "OK"};
+      }
+      if (phase !== "INSERT_BOOTSTRAP") fail("CHATGPT_RESERVATION_INVALID");
+      phase = "SEND_ATTEMPTED";
+      if (PFComposer.read(control("composer")) !== expectedBootstrap) fail("CHATGPT_BOOTSTRAP_MISMATCH");
+      const button = control("send");
+      requireBinding(value);
+      if (!Number.isSafeInteger(value.expiresAt) || Date.now() >= value.expiresAt) fail("CHATGPT_SEND_UNCERTAIN");
+      expectedBootstrap = null;
+      button.click(); // Exactly once. No DOM inspection or response monitoring after this point.
+      return {status: "OK"};
+    } finally { busy = false; }
+  }
+  chrome.runtime.onMessage.addListener((value, sender, sendResponse) => {
+    if (sender.id !== chrome.runtime.id || sender.tab) return false;
+    execute(value).then(sendResponse, error => {
+      const allowed = ["CHATGPT_PROTOCOL_INVALID", "CHATGPT_TAB_BUSY", "CHATGPT_AUTH_REQUIRED",
+        "CHATGPT_SELECTOR_UNAVAILABLE", "CHATGPT_BINDING_CHANGED", "CHATGPT_NEW_CHAT_FAILED",
+        "CHATGPT_RESERVATION_INVALID", "CHATGPT_BOOTSTRAP_MISMATCH", "CHATGPT_SEND_UNCERTAIN",
+        "CHATGPT_FACTORY_TAB_INVALID"];
+      sendResponse({status: "ERROR", errorCode: allowed.includes(error.message) ? error.message : "CHATGPT_SELECTOR_UNAVAILABLE"});
+    });
+    return true;
+  });
+})();

@@ -1,0 +1,35 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# FactoryDispatcher local/runtime state
+state/
+config.json
+
+# Secrets / credentials
+.env
+.env.*
+*.secret
+*.token
+token.json
+credentials.json
+client_secret*.json
+oauth*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# OS / IDE noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

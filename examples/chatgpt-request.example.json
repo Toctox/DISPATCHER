@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "1",
+  "artifactType": "DISPATCH_REQUEST",
+  "dispatchId": "D-EXAMPLE-0001",
+  "rootRunId": "R-EXAMPLE-0001",
+  "generation": 1,
+  "agentId": "REGISTRAR",
+  "changeId": "",
+  "taskType": "READ_ONLY_TEST",
+  "executorType": "CHATGPT",
+  "targetRef": {
+    "kind": "DRIVE_ARTIFACT",
+    "id": "REPLACE_ME"
+  },
+  "causedBy": [],
+  "requiredSources": [],
+  "instructions": "Read the declared source and produce only the requested staging artifact.",
+  "allowedWrites": {
+    "stagingOnly": true,
+    "expectedArtifactPattern": "RESULT__D-EXAMPLE-0001__*.json",
+    "receiptRequired": true
+  },
+  "completion": {
+    "terminalReceiptRequired": true
+  },
+  "retryPolicy": "SAFE_RETRY",
+  "sideEffectClass": "READ_ONLY",
+  "maxAttempts": 1,
+  "maxExecutionMinutes": 30,
+  "dedupeKey": "EXAMPLE-READ-ONLY-V1",
+  "dependsOn": [],
+  "readinessRule": "ALL_DEPENDENCIES_SUCCEEDED",
+  "status": "READY",
+  "createdAt": "2026-09-04T21:30:00Z"
+}
+

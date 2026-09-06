@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "2",
+  "artifactType": "DISPATCH_REQUEST",
+  "dispatchId": "D-CODEX-EXAMPLE-0001",
+  "rootRunId": "R-CODEX-EXAMPLE-0001",
+  "generation": 1,
+  "agentId": "CODEX_IMPLEMENTER",
+  "changeId": "CR-0004",
+  "taskType": "IMPLEMENTATION",
+  "executorType": "CODEX",
+  "codexExecution": {
+    "implementationEligible": true,
+    "repository": "Toctox/REPLACE_ME",
+    "repositoryPath": "C:\\absolute\\path\\to\\repository",
+    "baseBranch": "main",
+    "baseSha": "REPLACE_WITH_EXACT_40_HEX_SHA",
+    "specArtifact": "REPLACE_WITH_DRIVE_ID",
+    "specIdentity": "SPEC-REPLACE_ME-v1",
+    "causalDecision": "DECISION-REPLACE_ME"
+  },
+  "targetRef": {
+    "kind": "GIT_REPOSITORY",
+    "id": "Toctox/REPLACE_ME"
+  },
+  "causedBy": ["DECISION-REPLACE_ME"],
+  "requiredSources": ["REPLACE_WITH_DRIVE_ID"],
+  "instructions": "Implement only the approved specification from the exact declared base.",
+  "allowedWrites": {
+    "stagingOnly": false,
+    "expectedArtifactPattern": "EXECUTION_RECEIPT__D-CODEX-EXAMPLE-0001__*.json",
+    "receiptRequired": true
+  },
+  "completion": {
+    "terminalReceiptRequired": true
+  },
+  "retryPolicy": "RECONCILE_BEFORE_RETRY",
+  "sideEffectClass": "REPOSITORY_WRITE",
+  "maxAttempts": 1,
+  "maxExecutionMinutes": 45,
+  "dedupeKey": "CR-0004-CODEX-V1",
+  "dependsOn": [],
+  "readinessRule": "ALL_DEPENDENCIES_SUCCEEDED",
+  "status": "READY",
+  "createdAt": "2026-09-04T21:30:00Z"
+}

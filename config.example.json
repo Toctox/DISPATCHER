@@ -1,0 +1,28 @@
+{
+  "spreadsheetId": "1yUNfSW0jkCb-O9JpGpv8w8cYq5Uk6ngMlrOBlv7Pzww",
+  "credentialsFile": "secrets/credentials.json",
+  "tokenFile": "secrets/token.json",
+  "stateDirectory": "state",
+  "claimOwner": "",
+  "writesEnabled": false,
+  "manualChatGptLaunchEnabled": false,
+  "browserChatGptLaunchEnabled": false,
+  "chatGptBrowserMode": "EXTENSION_BRIDGE",
+  "chatGptExtensionBridgeEnabled": false,
+  "chatGptExtensionBridgeHost": "127.0.0.1",
+  "chatGptExtensionBridgePort": 8765,
+  "chatGptExtensionId": "",
+  "chatGptExtensionPairingSecretFile": "state/chatgpt-bridge/pairing-secret.json",
+  "chatGptCdpEndpoint": "http://127.0.0.1:9222",
+  "chatGptBrowserExecutable": "",
+  "chatGptBrowserProfileDirectory": "state/factory-browser",
+  "chatGptBrowserTimeoutSeconds": 2700,
+  "chatGptBrowserPollSeconds": 15,
+  "codexLaunchEnabled": false,
+  "chatGptUrl": "https://chatgpt.com/",
+  "codexExecutable": "codex",
+  "googleScopes": [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+  ]
+}
