@@ -5,6 +5,9 @@ import {CAPABILITY, VERSION, exactKeys, fail, proof, safeCode} from "./protocol.
 let socket = null;
 let connecting = false;
 let connected = false;
+let reconnectTimer = null;
+let reconnectDelayMs = 250;
+const MAX_RECONNECT_DELAY_MS = 5000;
 const initialize = (async () => {
   // Pairing credentials must never be available to content scripts.
   await chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
@@ -14,6 +17,23 @@ const initialize = (async () => {
   await chrome.storage.session.set({browserInstanceId: id});
   return new Controller(chrome, id);
 })();
+
+function cancelReconnect() {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleReconnect(immediate = false) {
+  if (socket || connecting || reconnectTimer !== null) return;
+  const delay = immediate ? 0 : reconnectDelayMs;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    void connect().catch(() => {});
+  }, delay);
+  if (!immediate) reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_RECONNECT_DELAY_MS);
+}
 
 async function connect() {
   if (socket || connecting) return;
@@ -48,6 +68,8 @@ async function connect() {
               value.proof !== await proof(pairing.secret, "server-extension", nonce, chrome.runtime.id)) fail();
           phase = "READY";
           connected = true;
+          reconnectDelayMs = 250;
+          cancelReconnect();
           clearTimeout(authDeadline);
           await chrome.storage.local.set({bridgeStatus: "CONNECTED"});
           heartbeat = setInterval(() => {
@@ -69,13 +91,17 @@ async function connect() {
       clearTimeout(authDeadline);
       if (heartbeat) clearInterval(heartbeat);
       if (socket === current) { socket = null; connected = false; }
-      // Reservation is intentionally not removed here.
+      // Reservation is intentionally not removed here and no command is replayed.
       void chrome.storage.local.set({bridgeStatus: "DISCONNECTED"});
+      scheduleReconnect();
     };
-  } finally { connecting = false; }
+  } finally {
+    connecting = false;
+    if (!socket) scheduleReconnect();
+  }
 }
 
-function reconnect() { void connect().catch(() => {}); }
+function reconnect() { scheduleReconnect(true); }
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("options.html")) return false;
   initialize.then(controller => optionsMessage(controller, message, sender,
@@ -95,6 +121,8 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === "bridge-reconnect") reconnect(); });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes.pairing) {
+    cancelReconnect();
+    reconnectDelayMs = 250;
     if (socket) socket.close();
     else reconnect();
   }
