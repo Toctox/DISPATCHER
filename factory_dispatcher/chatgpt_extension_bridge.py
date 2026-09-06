@@ -132,9 +132,15 @@ class Bridge:
             # Once exchange() starts, any lost ACK remains ambiguous and is never retried.
             await self.wait_for_extension()
             if operation(request) == RECOVER:
-                from .chatgpt_extension_recovery import recover_reservation
+                from . import chatgpt_extension_recovery as recovery
 
-                await recover_reservation(self, request)
+                # A bridge loss during NEW_CHAT is recoverable only through the normal
+                # evidence-gated path. The extension must still confirm its exact persisted
+                # phase is NEW_CHAT_ATTEMPTED; if it advanced to NEW_CHAT, release is refused.
+                recovery.PRE_SEND_RECOVERY.setdefault(
+                    "CHATGPT_BRIDGE_UNAVAILABLE", ("NEW_CHAT_ATTEMPTED", RECOVERY_RELEASE)
+                )
+                await recovery.recover_reservation(self, request)
                 return {
                     "protocolVersion": VERSION,
                     "type": "RESULT",
