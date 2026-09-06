@@ -8,7 +8,7 @@ $projectPath = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $pythonPath = Join-Path $projectPath '.venv\Scripts\python.exe'
 $dispatcherPath = Join-Path $projectPath 'dispatcher.py'
 $configPath = Join-Path $projectPath 'config.json'
-$bridgeRuntimeRevision = 'bridge-resilience-v1'
+$bridgeRuntimeRevision = 'bridge-resilience-v2'
 
 if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
     throw "Virtual environment not found: $pythonPath"
@@ -42,11 +42,8 @@ function Stop-ExactChatGptBridgeListener {
     $commandLine = [string]$process.CommandLine
     $actualName = if ($actualExe) { [IO.Path]::GetFileName($actualExe) } else { '' }
 
-    # Legacy manual launches may use relative .venv/config paths and Windows can
-    # report the base interpreter in ExecutablePath. Prove identity using the
-    # loopback listener plus the exact Python module and its config argument.
     $isPython = $actualName -match '^python(?:[0-9.]+)?\.exe$'
-    $hasExactModule = $commandLine.IndexOf('-m factory_dispatcher.chatgpt_extension_bridge', [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $hasExactModule = $commandLine -match '(?i)-m\s+factory_dispatcher\.chatgpt_extension_bridge(?:_runtime)?(?:\s|$)'
     $hasConfigSwitch = $commandLine.IndexOf('--config', [StringComparison]::OrdinalIgnoreCase) -ge 0
     $hasConfigValue = $commandLine.IndexOf($expectedConfig, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
         $commandLine -match '(?i)--config\s+["'']?\.?[\\/]?config\.json["'']?(?:\s|$)'
@@ -82,7 +79,7 @@ function Ensure-ChatGptExtensionBridge {
 
     $configArgument = '"' + $ConfigPath + '"'
     Start-Process -FilePath $PythonPath `
-        -ArgumentList @('-m','factory_dispatcher.chatgpt_extension_bridge','--config',$configArgument) `
+        -ArgumentList @('-m','factory_dispatcher.chatgpt_extension_bridge_runtime','--config',$configArgument) `
         -WorkingDirectory $ProjectPath `
         -WindowStyle Hidden | Out-Null
 
@@ -101,16 +98,31 @@ function Ensure-ChatGptExtensionBridge {
     throw 'ChatGPT extension bridge did not become available.'
 }
 
+function Get-ChatGptBridgeReservation {
+    param([string]$ProjectPath)
+    $reservationPath = Join-Path $ProjectPath 'state\chatgpt-bridge\reservation.json'
+    if (-not (Test-Path -LiteralPath $reservationPath -PathType Leaf)) { return $null }
+    $reservation = Get-Content -LiteralPath $reservationPath -Raw | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace([string]$reservation.reservationId)) { return $null }
+    return $reservation
+}
+
+function Get-LatestChatGptWorkerStatus {
+    param([string]$ProjectPath)
+    $runsRoot = Join-Path $ProjectPath 'state\chatgpt-runs'
+    if (-not (Test-Path -LiteralPath $runsRoot -PathType Container)) { return $null }
+    $latest = Get-ChildItem -LiteralPath $runsRoot -Filter 'status.json' -File -Recurse |
+        Sort-Object LastWriteTimeUtc -Descending |
+        Select-Object -First 1
+    if ($null -eq $latest) { return $null }
+    return Get-Content -LiteralPath $latest.FullName -Raw | ConvertFrom-Json
+}
+
 function Write-ChatGptBridgeDiagnostic {
     param([string]$ProjectPath)
     try {
-        $reservationPath = Join-Path $ProjectPath 'state\chatgpt-bridge\reservation.json'
-        if (-not (Test-Path -LiteralPath $reservationPath -PathType Leaf)) {
-            [Console]::Error.WriteLine('{"kind":"CHATGPT_BRIDGE_DIAGNOSTIC","reservation":"NONE"}')
-            return
-        }
-        $reservation = Get-Content -LiteralPath $reservationPath -Raw | ConvertFrom-Json
-        if ([string]::IsNullOrWhiteSpace([string]$reservation.reservationId)) {
+        $reservation = Get-ChatGptBridgeReservation -ProjectPath $ProjectPath
+        if ($null -eq $reservation) {
             [Console]::Error.WriteLine('{"kind":"CHATGPT_BRIDGE_DIAGNOSTIC","reservation":"NONE"}')
             return
         }
@@ -130,19 +142,11 @@ function Write-ChatGptBridgeDiagnostic {
 function Write-LatestChatGptWorkerDiagnostic {
     param([string]$ProjectPath)
     try {
-        $runsRoot = Join-Path $ProjectPath 'state\chatgpt-runs'
-        if (-not (Test-Path -LiteralPath $runsRoot -PathType Container)) {
+        $status = Get-LatestChatGptWorkerStatus -ProjectPath $ProjectPath
+        if ($null -eq $status) {
             [Console]::Error.WriteLine('{"kind":"CHATGPT_WORKER_DIAGNOSTIC","worker":"NONE"}')
             return
         }
-        $latest = Get-ChildItem -LiteralPath $runsRoot -Filter 'status.json' -File -Recurse |
-            Sort-Object LastWriteTimeUtc -Descending |
-            Select-Object -First 1
-        if ($null -eq $latest) {
-            [Console]::Error.WriteLine('{"kind":"CHATGPT_WORKER_DIAGNOSTIC","worker":"NONE"}')
-            return
-        }
-        $status = Get-Content -LiteralPath $latest.FullName -Raw | ConvertFrom-Json
         $payload = [ordered]@{
             kind = 'CHATGPT_WORKER_DIAGNOSTIC'
             worker = 'LATEST'
@@ -152,13 +156,41 @@ function Write-LatestChatGptWorkerDiagnostic {
             errorCode = [string]$status.errorCode
             sendAttempted = [bool]$status.sendAttempted
             needsReconciliation = [bool]$status.needsReconciliation
-            statusPath = $latest.FullName.Substring($ProjectPath.Length).TrimStart('\\')
         }
         [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
     }
     catch {
         [Console]::Error.WriteLine('{"kind":"CHATGPT_WORKER_DIAGNOSTIC","worker":"UNKNOWN"}')
     }
+}
+
+function Invoke-SafeSmoke0009Recovery {
+    param([string]$ProjectPath,[string]$PythonPath,[string]$ConfigPath)
+    $marker = Join-Path $ProjectPath 'state\chatgpt-bridge\recovered-smoke-0009.marker'
+    if (Test-Path -LiteralPath $marker -PathType Leaf) { return }
+    $reservation = Get-ChatGptBridgeReservation -ProjectPath $ProjectPath
+    $status = Get-LatestChatGptWorkerStatus -ProjectPath $ProjectPath
+    if ($null -eq $reservation -or $null -eq $status) { return }
+    if ([string]$reservation.phase -ne 'NEW_CHAT_ATTEMPTED' -or
+        [string]$status.dispatchId -ne 'D-SMOKE-CHATGPT-0009' -or
+        [string]$status.attemptId -ne 'D-SMOKE-CHATGPT-0009-A001' -or
+        [string]$status.state -ne 'STOPPED' -or
+        [string]$status.errorCode -ne 'CHATGPT_BRIDGE_UNAVAILABLE' -or
+        [bool]$status.sendAttempted) { return }
+
+    # The currently loaded extension may still use its 30-second reconnect alarm.
+    # Wait once after rolling the resident bridge; no browser action is issued here.
+    Start-Sleep -Seconds 32
+    & $PythonPath -m factory_dispatcher.chatgpt_extension_recover `
+        --config $ConfigPath `
+        --dispatch-id 'D-SMOKE-CHATGPT-0009' `
+        --attempt-id 'D-SMOKE-CHATGPT-0009-A001'
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Evidence-gated recovery for D-SMOKE-CHATGPT-0009 was refused or uncertain.'
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($marker, 'RELEASED_PRE_SEND', $utf8NoBom)
+    [Console]::Error.WriteLine('{"kind":"CHATGPT_RECOVERY_0009","outcome":"RELEASED_PRE_SEND"}')
 }
 
 $dispatcherArguments = @($dispatcherPath, '--tick', '--config', $configPath)
@@ -169,6 +201,9 @@ if ($DryRun) {
 Push-Location -LiteralPath $projectPath
 try {
     Ensure-ChatGptExtensionBridge -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath -Revision $bridgeRuntimeRevision
+    if ($DryRun) {
+        Invoke-SafeSmoke0009Recovery -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath
+    }
     Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath
     if ($DryRun) {
         Write-LatestChatGptWorkerDiagnostic -ProjectPath $projectPath
