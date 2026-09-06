@@ -18,6 +18,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		"dispatcherStart":   true,
 		"dispatcherTest":    true,
 		"allowGitPull":      true,
+		"allowGitPush":      true,
 		"commandTimeoutSec": true,
 		"pollIntervalMs":    true,
 		"pollSeconds":       true,
@@ -37,6 +38,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		DispatcherStart   string `json:"dispatcherStart"`
 		DispatcherTest    string `json:"dispatcherTest"`
 		AllowGitPull      bool   `json:"allowGitPull"`
+		AllowGitPush      bool   `json:"allowGitPush"`
 		CommandTimeoutSec int    `json:"commandTimeoutSec"`
 		PollIntervalMs    *int   `json:"pollIntervalMs"`
 		PollSeconds       *int   `json:"pollSeconds"`
@@ -63,6 +65,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		BridgeRoot:        w.BridgeRoot,
 		DispatcherWorkDir: w.DispatcherWorkDir,
 		AllowGitPull:      w.AllowGitPull,
+		AllowGitPush:      w.AllowGitPush,
 		CommandTimeoutSec: w.CommandTimeoutSec,
 		PollIntervalMs:    pollIntervalMs,
 	}
