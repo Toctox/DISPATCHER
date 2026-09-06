@@ -42,6 +42,40 @@ function Write-ChatGptBridgeDiagnostic {
     }
 }
 
+function Write-LatestChatGptWorkerDiagnostic {
+    param([string]$ProjectPath)
+    try {
+        $runsRoot = Join-Path $ProjectPath 'state\chatgpt-runs'
+        if (-not (Test-Path -LiteralPath $runsRoot -PathType Container)) {
+            [Console]::Error.WriteLine('{"kind":"CHATGPT_WORKER_DIAGNOSTIC","worker":"NONE"}')
+            return
+        }
+        $latest = Get-ChildItem -LiteralPath $runsRoot -Filter 'status.json' -File -Recurse |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+        if ($null -eq $latest) {
+            [Console]::Error.WriteLine('{"kind":"CHATGPT_WORKER_DIAGNOSTIC","worker":"NONE"}')
+            return
+        }
+        $status = Get-Content -LiteralPath $latest.FullName -Raw | ConvertFrom-Json
+        $payload = [ordered]@{
+            kind = 'CHATGPT_WORKER_DIAGNOSTIC'
+            worker = 'LATEST'
+            dispatchId = [string]$status.dispatchId
+            attemptId = [string]$status.attemptId
+            state = [string]$status.state
+            errorCode = [string]$status.errorCode
+            sendAttempted = [bool]$status.sendAttempted
+            needsReconciliation = [bool]$status.needsReconciliation
+            statusPath = $latest.FullName.Substring($ProjectPath.Length).TrimStart('\\')
+        }
+        [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
+    }
+    catch {
+        [Console]::Error.WriteLine('{"kind":"CHATGPT_WORKER_DIAGNOSTIC","worker":"UNKNOWN"}')
+    }
+}
+
 $dispatcherArguments = @($dispatcherPath, '--tick', '--config', $configPath)
 if ($DryRun) {
     $dispatcherArguments += '--dry-run'
@@ -50,6 +84,9 @@ if ($DryRun) {
 Push-Location -LiteralPath $projectPath
 try {
     Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath
+    if ($DryRun) {
+        Write-LatestChatGptWorkerDiagnostic -ProjectPath $projectPath
+    }
     & $pythonPath @dispatcherArguments
     exit $LASTEXITCODE
 }
