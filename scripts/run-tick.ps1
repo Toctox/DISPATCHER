@@ -35,15 +35,25 @@ function Stop-ExactChatGptBridgeListener {
     $listener = Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
         Select-Object -First 1
     if ($null -eq $listener) { return }
+
     $process = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $listener.OwningProcess) -ErrorAction Stop
-    $expectedExe = [IO.Path]::GetFullPath($PythonPath)
+    $expectedPython = [IO.Path]::GetFullPath($PythonPath)
+    $expectedConfig = [IO.Path]::GetFullPath($ConfigPath)
     $actualExe = if ($process.ExecutablePath) { [IO.Path]::GetFullPath([string]$process.ExecutablePath) } else { '' }
     $commandLine = [string]$process.CommandLine
-    if ($actualExe -ne $expectedExe -or
-        $commandLine -notlike '*factory_dispatcher.chatgpt_extension_bridge*' -or
-        $commandLine -notlike ('*' + $ConfigPath + '*')) {
-        throw 'Refusing to stop a non-FactoryDispatcher process on the ChatGPT bridge port.'
+    $actualName = if ($actualExe) { [IO.Path]::GetFileName($actualExe) } else { '' }
+
+    # Windows virtual environments can report the base interpreter in ExecutablePath.
+    # The original command line still contains the exact venv launcher. Require all
+    # three identity anchors before terminating anything on the loopback port.
+    $isPython = $actualName -match '^python(?:[0-9.]+)?\.exe$'
+    $hasExactVenv = $commandLine.IndexOf($expectedPython, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $hasExactModule = $commandLine.IndexOf('-m factory_dispatcher.chatgpt_extension_bridge', [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $hasExactConfig = $commandLine.IndexOf($expectedConfig, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    if (-not ($isPython -and $hasExactVenv -and $hasExactModule -and $hasExactConfig)) {
+        throw 'Refusing to stop a process that cannot be proven to be the exact FactoryDispatcher extension bridge.'
     }
+
     Stop-Process -Id $listener.OwningProcess -Force -ErrorAction Stop
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
         Start-Sleep -Milliseconds 100
