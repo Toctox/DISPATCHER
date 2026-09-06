@@ -1,6 +1,16 @@
 import {CAPABILITY, CONTROL, RECOVERY_RELEASE, RECOVERY_RELEASE_BOOTSTRAP, VERSION, exactKeys, fail, sameBinding, safeCode, validateCommand} from "./protocol.js";
 import {FactoryTabRegistry} from "./factory_tab.js";
 
+// Ephemeral replay guard only. Canonical recovery evidence remains in the bridge/Drive.
+// Controllers created in the same extension runtime share one API object, while a worker
+// restart is allowed to reconstruct exclusively from durable evidence.
+const recoveredReservations = new WeakMap();
+function recoverySet(api) {
+  let value = recoveredReservations.get(api);
+  if (!value) { value = new Set(); recoveredReservations.set(api, value); }
+  return value;
+}
+
 export class Controller {
   constructor(api, instanceId) {
     this.api = api; this.instanceId = instanceId; this.busy = false;
@@ -56,9 +66,14 @@ export class Controller {
       const {activeReservation: active} = await this.api.storage.local.get("activeReservation");
       if ([RECOVERY_RELEASE, RECOVERY_RELEASE_BOOTSTRAP].includes(value.action)) {
         // Only the authenticated bridge emits these after checking local/Drive evidence.
-        // NEW_CHAT recovery is idempotent when the extension never persisted its own
-        // reservation: the bridge write-ahead barrier can exist before extension storage.
-        if (value.action === RECOVERY_RELEASE && active === undefined) return {};
+        const recovered = recoverySet(this.api);
+        if (recovered.has(value.reservationId)) fail("CHATGPT_RESERVATION_INVALID");
+        // NEW_CHAT recovery is a safe no-op when the bridge write-ahead barrier exists
+        // but binding validation failed before the extension persisted its reservation.
+        if (value.action === RECOVERY_RELEASE && active === undefined) {
+          recovered.add(value.reservationId);
+          return {};
+        }
         // Otherwise each control is tied to one exact write-ahead phase and neither
         // inspects the current tab.
         const expectedPhase = value.action === RECOVERY_RELEASE
@@ -69,6 +84,7 @@ export class Controller {
             active.binding.extensionId !== this.api.runtime.id ||
             active.phase !== expectedPhase) fail("CHATGPT_RESERVATION_INVALID");
         await this.api.storage.local.remove("activeReservation");
+        recovered.add(value.reservationId);
         return {};
       }
       if (["PRECHECK", "NEW_CHAT"].includes(value.action) && active) fail("CHATGPT_TAB_BUSY");
