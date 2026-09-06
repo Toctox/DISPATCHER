@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const bridgeVersion = "0.3.0"
+const bridgeVersion = "0.3.1"
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
@@ -105,6 +105,22 @@ func finish(res *Result, start time.Time) {
 	res.DurationMs = end.Sub(start).Milliseconds()
 }
 
+func dispatcherScript(cfg Config, res *Result, start time.Time) (string, string, bool) {
+	workDir := strings.TrimSpace(cfg.DispatcherWorkDir)
+	if workDir == "" {
+		res.Error = "dispatcherWorkDir is not configured"
+		finish(res, start)
+		return "", "", false
+	}
+	script := filepath.Join(workDir, "scripts", "run-tick.ps1")
+	if stat, err := os.Stat(script); err != nil || stat.IsDir() {
+		res.Error = "Dispatcher script not found: scripts\\run-tick.ps1"
+		finish(res, start)
+		return "", "", false
+	}
+	return workDir, script, true
+}
+
 func executeAction(cfg Config, cmd Command, r runner) Result {
 	start := time.Now()
 	res := baseResult(cmd, start)
@@ -162,22 +178,26 @@ func executeAction(cfg Config, cmd Command, r runner) Result {
 		})
 
 	case "dispatcher.test":
-		workDir := strings.TrimSpace(cfg.DispatcherWorkDir)
-		if workDir == "" {
-			res.Error = "dispatcherWorkDir is not configured"
-			finish(&res, start)
-			return res
-		}
-		script := filepath.Join(workDir, "scripts", "run-tick.ps1")
-		if stat, err := os.Stat(script); err != nil || stat.IsDir() {
-			res.Error = "Dispatcher test script not found: scripts\\run-tick.ps1"
-			finish(&res, start)
+		workDir, script, ok := dispatcherScript(cfg, &res, start)
+		if !ok {
 			return res
 		}
 		return runKnown(cfg, cmd, start, r, runSpec{
 			logical: "scripts\\run-tick.ps1 -DryRun",
 			exe:     "powershell.exe",
 			args:    []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-DryRun"},
+			dir:     workDir,
+		})
+
+	case "dispatcher.tick":
+		workDir, script, ok := dispatcherScript(cfg, &res, start)
+		if !ok {
+			return res
+		}
+		return runKnown(cfg, cmd, start, r, runSpec{
+			logical: "scripts\\run-tick.ps1",
+			exe:     "powershell.exe",
+			args:    []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script},
 			dir:     workDir,
 		})
 
