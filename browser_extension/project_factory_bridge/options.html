@@ -20,8 +20,11 @@
       <button id="register-factory-tab" type="submit">Registrar aba selecionada como PROJECT FACTORY TAB</button>
     </form>
     <p><button id="refresh-factory-tabs" type="button">Atualizar lista e status</button>
-      <button id="clear-factory-tab" type="button">Limpar Factory Tab</button></p>
+      <button id="clear-factory-tab" type="button">Limpar Factory Tab</button>
+      <button id="diagnose-factory-tab" type="button">Diagnosticar DOM da Factory Tab</button></p>
     <p><output id="factory-message" aria-live="polite"></output></p>
+    <p>Diagnóstico estrutural somente leitura. Não coleta mensagens, HTML ou texto de conversas.</p>
+    <pre id="dom-diagnostic" style="white-space:pre-wrap;max-height:420px;overflow:auto"></pre>
     <p>A lista mostra Tab ID, janela e posição da aba naquela janela, sem títulos ou URLs
       de conversas. A posição serve só para identificação visual; o registro usa o Tab ID.</p>
   </section>
