@@ -6,10 +6,13 @@ function hasChatGPTOrigin(tab) {
     return url.origin === "https://chatgpt.com" && !url.username && !url.password;
   } catch { return false; }
 }
+function isNewChatPath(pathname) {
+  return pathname === "/" || /^\/[A-Za-z]{2}(?:-[A-Za-z]{2})?\/$/.test(pathname);
+}
 function isPristineRoute(tab) {
   try {
     const url = new URL(tab.url);
-    return url.origin === "https://chatgpt.com" && url.pathname === "/" &&
+    return url.origin === "https://chatgpt.com" && isNewChatPath(url.pathname) &&
       !url.search && !url.hash && !url.username && !url.password;
   } catch { return false; }
 }
