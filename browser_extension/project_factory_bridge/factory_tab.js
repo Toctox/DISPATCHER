@@ -6,18 +6,31 @@ function hasChatGPTOrigin(tab) {
     return url.origin === "https://chatgpt.com" && !url.username && !url.password;
   } catch { return false; }
 }
+function isPristineRoute(tab) {
+  try {
+    const url = new URL(tab.url);
+    return url.origin === "https://chatgpt.com" && url.pathname === "/" &&
+      !url.search && !url.hash && !url.username && !url.password;
+  } catch { return false; }
+}
 export function isChatGPTTab(tab) {
   return hasChatGPTOrigin(tab) && !tab.incognito && !tab.discarded && !tab.frozen &&
     tab.status !== "loading" && !tab.pendingUrl;
 }
 
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 export class FactoryTabRegistry {
   constructor(api, instanceId) { this.api = api; this.instanceId = instanceId; }
-  async tab(tabId) {
+  async rawTab(tabId) {
     let tab;
     try { tab = await this.api.tabs.get(tabId); }
     catch { fail("CHATGPT_FACTORY_TAB_NOT_FOUND"); }
     if (!tab || tab.id !== tabId) fail("CHATGPT_FACTORY_TAB_NOT_FOUND");
+    return tab;
+  }
+  async tab(tabId) {
+    const tab = await this.rawTab(tabId);
     if (!isChatGPTTab(tab)) fail("CHATGPT_FACTORY_TAB_INVALID");
     return tab;
   }
@@ -29,6 +42,29 @@ export class FactoryTabRegistry {
         factoryTab.browserInstanceId !== this.instanceId) fail("CHATGPT_FACTORY_TAB_INVALID");
     await this.tab(factoryTab.factoryTabId);
     return factoryTab;
+  }
+  async prepareRoot() {
+    const registration = await this.registered();
+    let tab = await this.tab(registration.factoryTabId);
+    if (isPristineRoute(tab)) return registration;
+
+    // Normalize only before an unpinned PRECHECK, while no reservation exists. A full
+    // document navigation is safe here because no documentId has been issued yet.
+    try {
+      await this.api.tabs.update(registration.factoryTabId, {url: "https://chatgpt.com/"});
+    } catch { fail("CHATGPT_FACTORY_TAB_INVALID"); }
+
+    const deadline = Date.now() + 15000;
+    while (Date.now() < deadline) {
+      try {
+        tab = await this.rawTab(registration.factoryTabId);
+      } catch (error) {
+        throw error;
+      }
+      if (isPristineRoute(tab) && isChatGPTTab(tab)) return registration;
+      await delay(100);
+    }
+    fail("CHATGPT_FACTORY_TAB_INVALID");
   }
   async list() {
     // Options-only discovery. No automatic selection, titles, conversation URLs or active-tab hints.
