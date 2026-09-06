@@ -17,6 +17,7 @@ from .chatgpt_extension_protocol import (
     MAX_MESSAGE,
     RECOVER,
     RECOVERY_RELEASE,
+    RECOVERY_RELEASE_BOOTSTRAP,
     VERSION,
     Reservation,
     check_settings,
@@ -109,7 +110,7 @@ class Bridge:
 
     async def relay(self, request):
         command(request)
-        if operation(request) == RECOVERY_RELEASE:
+        if operation(request) in {RECOVERY_RELEASE, RECOVERY_RELEASE_BOOTSTRAP}:
             # A worker cannot turn caller-supplied assertions into a storage release.
             fail("CHATGPT_RECOVERY_REFUSED")
         # Don't queue a second dispatch behind an active operation.
