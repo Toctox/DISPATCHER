@@ -34,19 +34,23 @@ export class FactoryTabRegistry {
     if (!isChatGPTTab(tab)) fail("CHATGPT_FACTORY_TAB_INVALID");
     return tab;
   }
-  async registered() {
+  async identity() {
     const {factoryTab} = await this.api.storage.local.get("factoryTab");
     if (!factoryTab) fail("CHATGPT_FACTORY_TAB_NOT_CONFIGURED");
     if (!exactKeys(factoryTab, ["factoryTabId", "browserInstanceId"]) ||
         !Number.isSafeInteger(factoryTab.factoryTabId) || factoryTab.factoryTabId < 0 ||
         factoryTab.browserInstanceId !== this.instanceId) fail("CHATGPT_FACTORY_TAB_INVALID");
+    return factoryTab;
+  }
+  async registered() {
+    const factoryTab = await this.identity();
     await this.tab(factoryTab.factoryTabId);
     return factoryTab;
   }
   async prepareRoot() {
-    const registration = await this.registered();
+    const registration = await this.identity();
     let tab = await this.tab(registration.factoryTabId);
-    if (isPristineRoute(tab)) return registration;
+    if (isPristineRoute(tab) || tab.status !== "complete") return registration;
 
     // Normalize only before an unpinned PRECHECK, while no reservation exists. A full
     // document navigation is safe here because no documentId has been issued yet.
@@ -56,11 +60,7 @@ export class FactoryTabRegistry {
 
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
-      try {
-        tab = await this.rawTab(registration.factoryTabId);
-      } catch (error) {
-        throw error;
-      }
+      tab = await this.rawTab(registration.factoryTabId);
       if (isPristineRoute(tab) && isChatGPTTab(tab)) return registration;
       await delay(100);
     }
