@@ -112,17 +112,27 @@ class ForegroundChatGPTLauncher:
     @classmethod
     def _process_basename(cls, pid: int) -> str:
         kernel32 = cls._kernel32()
-        handle = kernel32.OpenProcess(cls._PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        open_process.restype = wintypes.HANDLE
+        query_name = kernel32.QueryFullProcessImageNameW
+        query_name.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        query_name.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+
+        handle = open_process(cls._PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             return ""
         try:
             size = wintypes.DWORD(32768)
             buffer = ctypes.create_unicode_buffer(size.value)
-            if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            if not query_name(handle, 0, buffer, ctypes.byref(size)):
                 return ""
             return os.path.basename(buffer.value).lower()
         finally:
-            kernel32.CloseHandle(handle)
+            close_handle(handle)
 
     @classmethod
     def _find_chatgpt_window(cls) -> int:
@@ -185,6 +195,23 @@ class ForegroundChatGPTLauncher:
     def _set_clipboard_text(cls, text: str) -> None:
         user32 = cls._user32()
         kernel32 = cls._kernel32()
+
+        global_alloc = kernel32.GlobalAlloc
+        global_alloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+        global_alloc.restype = ctypes.c_void_p
+        global_lock = kernel32.GlobalLock
+        global_lock.argtypes = [ctypes.c_void_p]
+        global_lock.restype = ctypes.c_void_p
+        global_unlock = kernel32.GlobalUnlock
+        global_unlock.argtypes = [ctypes.c_void_p]
+        global_unlock.restype = wintypes.BOOL
+        global_free = kernel32.GlobalFree
+        global_free.argtypes = [ctypes.c_void_p]
+        global_free.restype = ctypes.c_void_p
+        set_clipboard_data = user32.SetClipboardData
+        set_clipboard_data.argtypes = [wintypes.UINT, ctypes.c_void_p]
+        set_clipboard_data.restype = ctypes.c_void_p
+
         encoded = (text + "\0").encode("utf-16-le")
         if not user32.OpenClipboard(None):
             raise ForegroundLaunchError("CHATGPT_DESKTOP_CLIPBOARD_BUSY")
@@ -192,23 +219,23 @@ class ForegroundChatGPTLauncher:
         try:
             if not user32.EmptyClipboard():
                 raise ForegroundLaunchError("CHATGPT_DESKTOP_CLIPBOARD_FAILED")
-            handle = kernel32.GlobalAlloc(cls._GMEM_MOVEABLE, len(encoded))
+            handle = global_alloc(cls._GMEM_MOVEABLE, len(encoded))
             if not handle:
                 raise ForegroundLaunchError("CHATGPT_DESKTOP_CLIPBOARD_FAILED")
-            pointer = kernel32.GlobalLock(handle)
+            pointer = global_lock(handle)
             if not pointer:
                 raise ForegroundLaunchError("CHATGPT_DESKTOP_CLIPBOARD_FAILED")
             try:
                 ctypes.memmove(pointer, encoded, len(encoded))
             finally:
-                kernel32.GlobalUnlock(handle)
-            if not user32.SetClipboardData(cls._CF_UNICODETEXT, handle):
+                global_unlock(handle)
+            if not set_clipboard_data(cls._CF_UNICODETEXT, handle):
                 raise ForegroundLaunchError("CHATGPT_DESKTOP_CLIPBOARD_FAILED")
             handle = None  # clipboard owns the allocation now
         finally:
             user32.CloseClipboard()
             if handle:
-                kernel32.GlobalFree(handle)
+                global_free(handle)
 
     @classmethod
     def _send_ctrl_v(cls) -> None:
