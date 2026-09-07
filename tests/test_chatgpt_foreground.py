@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from conftest import queue_row
+
 from factory_dispatcher.launchers.chatgpt_foreground import (
     ForegroundChatGPTLauncher,
     ForegroundLaunchError,
@@ -7,7 +9,7 @@ from factory_dispatcher.launchers.chatgpt_foreground import (
 from factory_dispatcher.models import DispatchJob, DispatchRequest
 
 
-def _job(queue_row) -> DispatchJob:
+def _job() -> DispatchJob:
     return DispatchJob.from_row(2, queue_row(agentId="REDTEAM"))
 
 
@@ -86,13 +88,13 @@ def _wire_success(monkeypatch, launcher, events):
 
 
 def test_foreground_launcher_stabilizes_new_chat_and_verifies_before_enter(
-    monkeypatch, tmp_path, queue_row, chatgpt_request
+    monkeypatch, tmp_path, chatgpt_request
 ):
     events = []
     launcher = ForegroundChatGPTLauncher(tmp_path)
     _wire_success(monkeypatch, launcher, events)
 
-    result = launcher.launch(_job(queue_row), _request(chatgpt_request), "BOOTSTRAP")
+    result = launcher.launch(_job(), _request(chatgpt_request), "BOOTSTRAP")
 
     assert result.launcher == "FOREGROUND_CHATGPT_DESKTOP"
     assert [event for event in events if event[0] == "ctrl_n"] == [("ctrl_n",), ("ctrl_n",)]
@@ -106,7 +108,7 @@ def test_foreground_launcher_stabilizes_new_chat_and_verifies_before_enter(
 
 
 def test_foreground_launcher_never_enters_when_bootstrap_verification_fails(
-    monkeypatch, tmp_path, queue_row, chatgpt_request
+    monkeypatch, tmp_path, chatgpt_request
 ):
     events = []
     launcher = ForegroundChatGPTLauncher(tmp_path)
@@ -123,7 +125,7 @@ def test_foreground_launcher_never_enters_when_bootstrap_verification_fails(
     )
 
     try:
-        launcher.launch(_job(queue_row), _request(chatgpt_request), "BOOTSTRAP")
+        launcher.launch(_job(), _request(chatgpt_request), "BOOTSTRAP")
     except ForegroundLaunchError as exc:
         assert exc.code == "CHATGPT_DESKTOP_BOOTSTRAP_VERIFY_FAILED"
     else:
