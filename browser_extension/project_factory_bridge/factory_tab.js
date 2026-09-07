@@ -12,7 +12,10 @@ function isNewChatPath(pathname) {
 function isPristineRoute(tab) {
   try {
     const url = new URL(tab.url);
-    return url.origin === "https://chatgpt.com" && isNewChatPath(url.pathname) &&
+    // Only the canonical root is considered pre-binding pristine. Localized roots
+    // such as /pt-BR/ are valid ChatGPT new-chat surfaces, but normalize them to /
+    // before pinning documentId so NEW_CHAT never has to cross that route boundary.
+    return url.origin === "https://chatgpt.com" && url.pathname === "/" &&
       !url.search && !url.hash && !url.username && !url.password;
   } catch { return false; }
 }
