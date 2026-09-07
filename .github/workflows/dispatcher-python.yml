@@ -9,6 +9,7 @@ on:
       - 'tests/test_chatgpt_extension.py'
       - 'tests/test_chatgpt_bridge_resilience.py'
       - 'tests/test_chatgpt_foreground.py'
+      - 'tests/test_chatgpt_foreground_v4.py'
       - 'requirements*.txt'
       - '.github/workflows/dispatcher-python.yml'
   pull_request:
@@ -18,6 +19,7 @@ on:
       - 'tests/test_chatgpt_extension.py'
       - 'tests/test_chatgpt_bridge_resilience.py'
       - 'tests/test_chatgpt_foreground.py'
+      - 'tests/test_chatgpt_foreground_v4.py'
       - 'requirements*.txt'
       - '.github/workflows/dispatcher-python.yml'
   workflow_dispatch:
@@ -59,4 +61,4 @@ jobs:
       - name: Foreground launcher regression tests
         shell: pwsh
         run: |
-          python -m pytest tests/test_chatgpt_foreground.py -q
+          python -m pytest tests/test_chatgpt_foreground.py tests/test_chatgpt_foreground_v4.py -q
