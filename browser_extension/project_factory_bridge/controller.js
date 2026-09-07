@@ -89,10 +89,14 @@ export class Controller {
       }
       if (["PRECHECK", "NEW_CHAT"].includes(value.action) && active) fail("CHATGPT_TAB_BUSY");
       if (value.action === "PRECHECK") {
-        // Only the launcher's unpinned PRECHECK may normalize the dedicated Factory Tab.
-        // This happens before claim/reservation, so a full-document transition cannot make
-        // an execution ambiguous. The worker's pinned PRECHECK remains strictly read-only.
-        const prepared = "binding" in value ? null : await this.registry.prepareRoot();
+        // The launcher's unpinned PRECHECK may normalize the dedicated Factory Tab.
+        // Finish all navigation/draft clearing before binding is observed or the queue is claimed.
+        // The worker's pinned PRECHECK remains strictly read-only.
+        const unpinned = !("binding" in value);
+        const prepared = unpinned ? await this.registry.prepareRoot() : null;
+        if (unpinned) {
+          await this.content(prepared.factoryTabId, {action: "PREPARE_NEW_CHAT"});
+        }
         return {binding: await this.inspect(value.binding, prepared)};
       }
       if (value.action !== "NEW_CHAT") {
@@ -108,10 +112,8 @@ export class Controller {
         return {};
       }
       if (value.action === "NEW_CHAT") {
-        // The worker has just completed the pinned PRECHECK. Re-running PRECHECK here
-        // creates a race with harmless ChatGPT SPA churn before any side effect exists.
-        // Revalidate stable registration identity only; content.js performs the final,
-        // exact documentId check immediately before NEW_CHAT can touch the page.
+        // The unpinned launcher PRECHECK already prepared a pristine surface. Revalidate
+        // stable registration identity only; content.js performs the final documentId check.
         const registration = await this.registry.registered();
         if (value.binding.extensionId !== this.api.runtime.id ||
             value.binding.browserInstanceId !== registration.browserInstanceId ||
