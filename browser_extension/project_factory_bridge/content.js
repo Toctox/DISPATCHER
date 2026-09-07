@@ -7,6 +7,9 @@
   let allowedNewChatNavigation = false;
   const fail = code => { throw new Error(code); };
   const isNewChatPath = pathname => pathname === "/" || /^\/[A-Za-z]{2}(?:-[A-Za-z]{2})?\/$/.test(pathname);
+  const composerMatches = (element, expected) => typeof PFComposer.matches === "function"
+    ? PFComposer.matches(element, expected)
+    : PFComposer.read(element) === expected;
   function invalidateBinding() {
     documentId = crypto.randomUUID();
     phase = "BINDING_CHANGED";
@@ -144,14 +147,14 @@
         PFComposer.insert(control("composer"), value.bootstrap);
         await delay(100);
         requireBinding(value);
-        if (!PFComposer.matches(control("composer"), value.bootstrap)) fail("CHATGPT_BOOTSTRAP_MISMATCH");
+        if (!composerMatches(control("composer"), value.bootstrap)) fail("CHATGPT_BOOTSTRAP_MISMATCH");
         expectedBootstrap = value.bootstrap;
         phase = "INSERT_BOOTSTRAP";
         return {status: "OK"};
       }
       if (phase !== "INSERT_BOOTSTRAP") fail("CHATGPT_RESERVATION_INVALID");
       phase = "SEND_ATTEMPTED";
-      if (!PFComposer.matches(control("composer"), expectedBootstrap)) fail("CHATGPT_BOOTSTRAP_MISMATCH");
+      if (!composerMatches(control("composer"), expectedBootstrap)) fail("CHATGPT_BOOTSTRAP_MISMATCH");
       const button = control("send");
       requireBinding(value);
       if (!Number.isSafeInteger(value.expiresAt) || Date.now() >= value.expiresAt) fail("CHATGPT_SEND_UNCERTAIN");
