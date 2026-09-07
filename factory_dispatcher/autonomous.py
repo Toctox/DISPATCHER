@@ -6,6 +6,8 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from googleapiclient.errors import HttpError
+
 from .engine import Dispatcher
 from .errors import ContractError
 from .models import ACTIVE_STATES, DispatchJob, DispatchState, isoformat
@@ -32,6 +34,16 @@ _ALLOWED_PLAN_AGENTS = {
     "CODEX_IMPLEMENTER",
 }
 _ALLOWED_EXECUTORS = {"CHATGPT", "CODEX"}
+_WORKSTREAM_HEADERS = (
+    "workstreamId",
+    "changeId",
+    "targetRef",
+    "status",
+    "priority",
+    "targetState",
+    "requiredSources",
+    "instructions",
+)
 
 
 def _slug(value: str, maximum: int = 48) -> str:
@@ -44,8 +56,9 @@ class AutonomousDispatcher(Dispatcher):
 
     It never chooses product semantics or overrides gates. On IDLE it can only:
     publish DECISION artifacts to the immutable decision folder, materialize a
-    strictly validated ORCHESTRATOR dispatch plan, or enqueue one ORCHESTRATOR
-    continuation checkpoint for staged work that has not yet been consolidated.
+    strictly validated ORCHESTRATOR dispatch plan, enqueue one ORCHESTRATOR
+    continuation checkpoint for staged work, or seed one ORCHESTRATOR planning
+    checkpoint from an explicitly ACTIVE WORKSTREAMS row.
     """
 
     def tick(self, *, dry_run: bool = False) -> dict[str, Any]:
@@ -73,6 +86,14 @@ class AutonomousDispatcher(Dispatcher):
             launched = super().tick(dry_run=False)
             launched["autonomousAction"] = "ORCHESTRATOR_CONTINUATION_ENQUEUED"
             launched["continuationDispatchId"] = continuation
+            launched["publishedDecisions"] = published
+            return launched
+
+        planner = self._ensure_workstream_planner(jobs, factory)
+        if planner:
+            launched = super().tick(dry_run=False)
+            launched["autonomousAction"] = "WORKSTREAM_PLANNER_ENQUEUED"
+            launched["plannerDispatchId"] = planner
             launched["publishedDecisions"] = published
             return launched
 
@@ -128,7 +149,9 @@ class AutonomousDispatcher(Dispatcher):
                 if not isinstance(item, dict):
                     continue
                 source_id = str(item.get("stagingDriveId") or "").strip()
-                artifact_id = _slug(str(item.get("artifactId") or "FACTORY-POLICY-DECISION"), 100)
+                artifact_id = _slug(
+                    str(item.get("artifactId") or "FACTORY-POLICY-DECISION"), 100
+                )
                 if not source_id:
                     continue
                 metadata = drive.files().get(
@@ -172,7 +195,9 @@ class AutonomousDispatcher(Dispatcher):
                 continue
             plan_id = str(dispatch_plan.get("stagingDriveId") or "").strip()
             if not plan_id:
-                raise ContractError("ORCHESTRATOR receipt declares dispatchPlan without stagingDriveId")
+                raise ContractError(
+                    "ORCHESTRATOR receipt declares dispatchPlan without stagingDriveId"
+                )
             plan = self.gateway.read_json_artifact(plan_id)
             if plan.get("artifactType") != "DISPATCH_PLAN":
                 raise ContractError("dispatchPlan artifactType must be DISPATCH_PLAN")
@@ -191,16 +216,26 @@ class AutonomousDispatcher(Dispatcher):
                 dedupe = str(planned.get("dedupeKey") or "").strip()
                 if not dedupe:
                     plan_identity = str(plan.get("planId") or plan_id)
-                    dedupe = f"AUTO-{orchestrator.change_id}-{_slug(agent, 20)}-{hashlib.sha256((plan_identity + ':' + str(index)).encode()).hexdigest()[:12]}"
+                    identity = plan_identity + ":" + str(index)
+                    digest = hashlib.sha256(identity.encode()).hexdigest()[:12]
+                    dedupe = f"AUTO-{orchestrator.change_id}-{_slug(agent, 20)}-{digest}"
                 if dedupe in existing_dedupes:
                     continue
                 digest = hashlib.sha256(dedupe.encode()).hexdigest()[:8].upper()
-                dispatch_id = f"D-{_slug(orchestrator.change_id, 24)}-{_slug(agent, 20)}-{digest}-{index:02d}"
-                root_run_id = str(planned.get("rootRunId") or f"R-{_slug(orchestrator.change_id, 24)}-AUTO-{digest}")
+                dispatch_id = (
+                    f"D-{_slug(orchestrator.change_id, 24)}-"
+                    f"{_slug(agent, 20)}-{digest}-{index:02d}"
+                )
+                root_run_id = str(
+                    planned.get("rootRunId")
+                    or f"R-{_slug(orchestrator.change_id, 24)}-AUTO-{digest}"
+                )
                 target_ref = str(planned.get("targetRef") or orchestrator.target_ref)
                 task_type = str(planned.get("taskType") or "CONTINUATION_WORK")
                 side_effect = str(planned.get("sideEffectClass") or "READ_ONLY")
-                retry_policy = str(planned.get("retryPolicy") or "RECONCILE_BEFORE_RETRY")
+                retry_policy = str(
+                    planned.get("retryPolicy") or "RECONCILE_BEFORE_RETRY"
+                )
                 max_attempts = int(planned.get("maxAttempts") or 1)
                 priority = int(planned.get("priority") or 10)
                 depends_on = planned.get("dependsOn") or []
@@ -212,7 +247,10 @@ class AutonomousDispatcher(Dispatcher):
                 instructions = str(planned.get("instructions") or "").strip()
                 if not instructions:
                     raise ContractError("dispatchPlan job instructions are required")
-                expected_pattern = str(planned.get("expectedArtifactPattern") or f"{orchestrator.change_id}-{agent}-*.json")
+                expected_pattern = str(
+                    planned.get("expectedArtifactPattern")
+                    or f"{orchestrator.change_id}-{agent}-*.json"
+                )
                 request = {
                     "schemaVersion": 1,
                     "artifactType": "DISPATCH_REQUEST",
@@ -224,7 +262,10 @@ class AutonomousDispatcher(Dispatcher):
                     "taskType": task_type,
                     "executorType": executor,
                     "targetRef": {"kind": "DRIVE_ARTIFACT", "id": target_ref},
-                    "causedBy": [orchestrator.dispatch_id, str(plan.get("planId") or plan_id)],
+                    "causedBy": [
+                        orchestrator.dispatch_id,
+                        str(plan.get("planId") or plan_id),
+                    ],
                     "completion": {"terminalReceiptRequired": True},
                     "retryPolicy": retry_policy,
                     "sideEffectClass": side_effect,
@@ -245,50 +286,59 @@ class AutonomousDispatcher(Dispatcher):
                 }
                 request_id = self._upload_request(factory, dispatch_id, request)
                 now = isoformat(datetime.now(UTC))
-                self._append_queue_row([
-                    dispatch_id,
-                    root_run_id,
-                    orchestrator.generation + 1,
-                    agent,
-                    orchestrator.change_id,
-                    task_type,
-                    target_ref,
-                    "READY" if not depends_on else "WAITING_DEPENDENCIES",
-                    priority,
-                    dedupe,
-                    json.dumps(depends_on, separators=(",", ":")) if depends_on else "",
-                    0,
-                    max_attempts,
-                    "",
-                    "",
-                    "",
-                    "",
-                    retry_policy,
-                    side_effect,
-                    request_id,
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    now,
-                    "",
-                    "",
-                    "",
-                    now,
-                ])
+                self._append_queue_row(
+                    [
+                        dispatch_id,
+                        root_run_id,
+                        orchestrator.generation + 1,
+                        agent,
+                        orchestrator.change_id,
+                        task_type,
+                        target_ref,
+                        "READY" if not depends_on else "WAITING_DEPENDENCIES",
+                        priority,
+                        dedupe,
+                        json.dumps(depends_on, separators=(",", ":")) if depends_on else "",
+                        0,
+                        max_attempts,
+                        "",
+                        "",
+                        "",
+                        "",
+                        retry_policy,
+                        side_effect,
+                        request_id,
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        now,
+                        "",
+                        "",
+                        "",
+                        now,
+                    ]
+                )
                 existing_dedupes.add(dedupe)
                 materialized += 1
         return materialized
 
-    def _ensure_orchestrator_continuation(self, jobs: list[DispatchJob], factory) -> str | None:
+    def _ensure_orchestrator_continuation(
+        self, jobs: list[DispatchJob], factory
+    ) -> str | None:
         # Do not invent planning work while execution/dependency work is still pending.
-        if any(job.status in ACTIVE_STATES or job.status in {DispatchState.READY, DispatchState.WAITING_DEPENDENCIES} for job in jobs):
+        pending_states = {DispatchState.READY, DispatchState.WAITING_DEPENDENCIES}
+        if any(job.status in ACTIVE_STATES or job.status in pending_states for job in jobs):
             return None
 
         config = self._config_mapping()
-        prompt_id = config.get("ORCHESTRATOR_PROMPT_DOC_ID", "1lM9ObuTA108GnAIDzqzZ-ciK0tPPvtJUXj1YEZAs_Yg")
-        start_here = config.get("START_HERE_ID", "1qjQt-8NvqyAog5MJnT8hV4rYejWhp3uh5u-FAdn_R3k")
+        prompt_id = config.get(
+            "ORCHESTRATOR_PROMPT_DOC_ID", "1lM9ObuTA108GnAIDzqzZ-ciK0tPPvtJUXj1YEZAs_Yg"
+        )
+        start_here = config.get(
+            "START_HERE_ID", "1qjQt-8NvqyAog5MJnT8hV4rYejWhp3uh5u-FAdn_R3k"
+        )
 
         changes = sorted({job.change_id for job in jobs if job.change_id})
         for change_id in changes:
@@ -314,7 +364,11 @@ class AutonomousDispatcher(Dispatcher):
             dispatch_id = f"D-{_slug(change_id, 24)}-ORCHESTRATOR-{digest}"
             root_run_id = f"R-{_slug(change_id, 24)}-CONT-{digest}"
             receipt_refs = [
-                {"kind": "DRIVE_ARTIFACT", "id": job.receipt_drive_id, "title": f"Receipt {job.dispatch_id}"}
+                {
+                    "kind": "DRIVE_ARTIFACT",
+                    "id": job.receipt_drive_id,
+                    "title": f"Receipt {job.dispatch_id}",
+                }
                 for job in staged
             ]
             request = {
@@ -339,63 +393,305 @@ class AutonomousDispatcher(Dispatcher):
                 "status": "READY",
                 "createdAt": isoformat(datetime.now(UTC)),
                 "requiredSources": [
-                    {"kind": "DRIVE_ARTIFACT", "id": factory.bootstrap_doc_id, "title": "FACTORY_EXECUTOR_BOOTSTRAP-v1"},
-                    {"kind": "DRIVE_ARTIFACT", "id": start_here, "title": "START_HERE_PROJECT_FACTORY"},
-                    {"kind": "DRIVE_ARTIFACT", "id": prompt_id, "title": "PROMPT_ORCHESTRATOR"},
+                    {
+                        "kind": "DRIVE_ARTIFACT",
+                        "id": factory.bootstrap_doc_id,
+                        "title": "FACTORY_EXECUTOR_BOOTSTRAP-v1",
+                    },
+                    {
+                        "kind": "DRIVE_ARTIFACT",
+                        "id": start_here,
+                        "title": "START_HERE_PROJECT_FACTORY",
+                    },
+                    {
+                        "kind": "DRIVE_ARTIFACT",
+                        "id": prompt_id,
+                        "title": "PROMPT_ORCHESTRATOR",
+                    },
                     *receipt_refs,
                 ],
                 "instructions": (
-                    "Autonomous continuation checkpoint. Reconstruct the current CR state from canonical governance, "
-                    "the exact terminal receipts and their staged artifacts. Consolidate evidence without erasing dissent. "
-                    "If a decision is needed, plan a DECISION agent job; do not silently choose HUMAN_ONLY classes. "
-                    "If further governed work is needed, produce exactly one DISPATCH_PLAN JSON in this attempt staging "
-                    "with artifactType=DISPATCH_PLAN, planId, changeId, rationale, evidenceRefs and jobs[]. Each jobs[] item "
-                    "must contain agentId, executorType, taskType, targetRef, instructions, dedupeKey, sideEffectClass, "
-                    "retryPolicy, priority, maxAttempts, requiredSources and expectedArtifactPattern. In the terminal receipt "
-                    "set dispatchPlan.present=true and dispatchPlan.stagingDriveId to that plan file. If no further work is "
-                    "legitimately actionable, set dispatchPlan.present=false and explain why in the ORCHESTRATOR artifact. "
-                    "Never bypass gates or implement product code."
+                    "Autonomous continuation checkpoint. Reconstruct the current CR state from "
+                    "canonical governance, the exact terminal receipts and their staged artifacts. "
+                    "Consolidate evidence without erasing dissent. If a decision is needed, plan a "
+                    "DECISION agent job; do not silently choose HUMAN_ONLY classes. If further "
+                    "governed work is needed, produce exactly one DISPATCH_PLAN JSON in this attempt "
+                    "staging with artifactType=DISPATCH_PLAN, planId, changeId, rationale, "
+                    "evidenceRefs and jobs[]. Each jobs[] item must contain agentId, executorType, "
+                    "taskType, targetRef, instructions, dedupeKey, sideEffectClass, retryPolicy, "
+                    "priority, maxAttempts, requiredSources and expectedArtifactPattern. In the "
+                    "terminal receipt set dispatchPlan.present=true and dispatchPlan.stagingDriveId "
+                    "to that plan file. If no further work is legitimately actionable, set "
+                    "dispatchPlan.present=false and explain why in the ORCHESTRATOR artifact. Never "
+                    "bypass gates or implement product code."
                 ),
                 "allowedWrites": {
                     "stagingOnly": True,
-                    "expectedArtifactPattern": f"{change_id}-ORCHESTRATOR-CONTINUATION-*.json",
+                    "expectedArtifactPattern": (
+                        f"{change_id}-ORCHESTRATOR-CONTINUATION-*.json"
+                    ),
                     "receiptRequired": True,
                 },
                 "dedupeKey": dedupe,
             }
             request_id = self._upload_request(factory, dispatch_id, request)
             now = isoformat(datetime.now(UTC))
-            self._append_queue_row([
-                dispatch_id,
-                root_run_id,
-                request["generation"],
-                _CONTINUATION_AGENT,
-                change_id,
-                "AUTONOMOUS_CONTINUATION",
-                latest.target_ref,
-                "READY",
-                100,
-                dedupe,
-                "",
-                0,
-                1,
-                "",
-                "",
-                "",
-                "",
-                "RECONCILE_BEFORE_RETRY",
-                "READ_ONLY",
-                request_id,
-                "",
-                "",
-                "",
-                "",
-                "",
-                now,
-                "",
-                "",
-                "",
-                now,
-            ])
+            self._append_queue_row(
+                [
+                    dispatch_id,
+                    root_run_id,
+                    request["generation"],
+                    _CONTINUATION_AGENT,
+                    change_id,
+                    "AUTONOMOUS_CONTINUATION",
+                    latest.target_ref,
+                    "READY",
+                    100,
+                    dedupe,
+                    "",
+                    0,
+                    1,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "RECONCILE_BEFORE_RETRY",
+                    "READ_ONLY",
+                    request_id,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    now,
+                    "",
+                    "",
+                    "",
+                    now,
+                ]
+            )
+            return dispatch_id
+        return None
+
+    def _read_active_workstreams(self) -> list[dict[str, Any]]:
+        """Read an optional WORKSTREAMS sheet without making it a deployment prerequisite."""
+        values = self.gateway.sheets.spreadsheets().values()
+        try:
+            rows = values.get(
+                spreadsheetId=self.gateway.spreadsheet_id,
+                range="WORKSTREAMS!A1:H500",
+            ).execute().get("values", [])
+        except HttpError as exc:
+            status = getattr(getattr(exc, "resp", None), "status", None)
+            if status in {400, 404}:
+                return []
+            raise
+        if not rows:
+            return []
+
+        headers = [str(value).strip() for value in rows[0]]
+        missing = [header for header in _WORKSTREAM_HEADERS if header not in headers]
+        if missing:
+            raise ContractError(f"WORKSTREAMS is missing headers: {', '.join(missing)}")
+
+        workstreams: list[dict[str, Any]] = []
+        for row_number, raw in enumerate(rows[1:], start=2):
+            padded = list(raw) + [""] * (len(headers) - len(raw))
+            row = dict(zip(headers, padded, strict=True))
+            if str(row.get("status") or "").strip().upper() != "ACTIVE":
+                continue
+            workstream_id = str(row.get("workstreamId") or "").strip()
+            change_id = str(row.get("changeId") or "").strip()
+            target_ref = str(row.get("targetRef") or "").strip()
+            if not workstream_id or not change_id or not target_ref:
+                raise ContractError(
+                    f"WORKSTREAMS row {row_number} requires workstreamId, changeId and targetRef"
+                )
+            try:
+                priority = int(str(row.get("priority") or "100"))
+            except ValueError as exc:
+                raise ContractError(
+                    f"WORKSTREAMS row {row_number} priority must be an integer"
+                ) from exc
+            if priority < 1:
+                raise ContractError(
+                    f"WORKSTREAMS row {row_number} priority must be positive"
+                )
+
+            required_sources: list[Any] = []
+            source_text = str(row.get("requiredSources") or "").strip()
+            if source_text:
+                try:
+                    parsed = json.loads(source_text)
+                except json.JSONDecodeError as exc:
+                    raise ContractError(
+                        f"WORKSTREAMS row {row_number} requiredSources must be JSON"
+                    ) from exc
+                if not isinstance(parsed, list):
+                    raise ContractError(
+                        f"WORKSTREAMS row {row_number} requiredSources must be an array"
+                    )
+                required_sources = parsed
+
+            workstreams.append(
+                {
+                    "rowNumber": row_number,
+                    "workstreamId": workstream_id,
+                    "changeId": change_id,
+                    "targetRef": target_ref,
+                    "priority": priority,
+                    "targetState": str(row.get("targetState") or "").strip(),
+                    "requiredSources": required_sources,
+                    "instructions": str(row.get("instructions") or "").strip(),
+                }
+            )
+        return sorted(
+            workstreams,
+            key=lambda item: (-int(item["priority"]), int(item["rowNumber"])),
+        )
+
+    def _ensure_workstream_planner(self, jobs: list[DispatchJob], factory) -> str | None:
+        """Seed one ORCHESTRATOR planning job for an explicit active workstream.
+
+        This is deliberately mechanical. WORKSTREAMS says what change is active and
+        which canonical target the Orchestrator must inspect; only the Orchestrator
+        may decide which specialist jobs belong in the resulting DISPATCH_PLAN.
+        """
+        pending_states = {DispatchState.READY, DispatchState.WAITING_DEPENDENCIES}
+        if any(job.status in ACTIVE_STATES or job.status in pending_states for job in jobs):
+            return None
+
+        workstreams = self._read_active_workstreams()
+        if not workstreams:
+            return None
+
+        config = self._config_mapping()
+        prompt_id = config.get(
+            "ORCHESTRATOR_PROMPT_DOC_ID", "1lM9ObuTA108GnAIDzqzZ-ciK0tPPvtJUXj1YEZAs_Yg"
+        )
+        start_here = config.get(
+            "START_HERE_ID", "1qjQt-8NvqyAog5MJnT8hV4rYejWhp3uh5u-FAdn_R3k"
+        )
+        existing_dedupes = {job.dedupe_key for job in jobs if job.dedupe_key}
+
+        for workstream in workstreams:
+            workstream_id = str(workstream["workstreamId"])
+            change_id = str(workstream["changeId"])
+            target_ref = str(workstream["targetRef"])
+            dedupe = f"AUTO-WORKSTREAM-{_slug(workstream_id, 40)}"
+            if dedupe in existing_dedupes:
+                continue
+
+            change_jobs = [job for job in jobs if job.change_id == change_id]
+            generation = max((job.generation for job in change_jobs), default=0) + 1
+            digest = hashlib.sha256(dedupe.encode()).hexdigest()[:12].upper()
+            dispatch_id = f"D-{_slug(change_id, 24)}-ORCHESTRATOR-PLAN-{digest}"
+            root_run_id = f"R-{_slug(change_id, 24)}-PLAN-{digest}"
+            target_state = str(workstream.get("targetState") or "").strip()
+            extra_instructions = str(workstream.get("instructions") or "").strip()
+            required_sources = list(workstream.get("requiredSources") or [])
+
+            instructions = (
+                f"Autonomous workstream planning checkpoint for {workstream_id}. Reconstruct the "
+                f"current governed state of {change_id} from canonical sources. The workstream "
+                f"targetRef is {target_ref}. "
+            )
+            if target_state:
+                instructions += f"The requested target state is {target_state}. "
+            if extra_instructions:
+                instructions += f"Workstream instruction: {extra_instructions} "
+            instructions += (
+                "Do not bypass gates or invent product semantics. Decide which authorized specialist "
+                "jobs are actually needed and produce exactly one DISPATCH_PLAN JSON in this attempt "
+                "staging with artifactType=DISPATCH_PLAN, planId, changeId, rationale, evidenceRefs "
+                "and jobs[]. Each jobs[] item must contain agentId, executorType, taskType, targetRef, "
+                "instructions, dedupeKey, sideEffectClass, retryPolicy, priority, maxAttempts, "
+                "requiredSources and expectedArtifactPattern. If no further governed work is "
+                "actionable, set dispatchPlan.present=false in the terminal receipt and explain why."
+            )
+
+            request = {
+                "schemaVersion": 1,
+                "artifactType": "DISPATCH_REQUEST",
+                "dispatchId": dispatch_id,
+                "rootRunId": root_run_id,
+                "generation": generation,
+                "agentId": _CONTINUATION_AGENT,
+                "changeId": change_id,
+                "taskType": "AUTONOMOUS_WORKSTREAM_PLANNING",
+                "executorType": "CHATGPT",
+                "targetRef": {"kind": "DRIVE_ARTIFACT", "id": target_ref},
+                "causedBy": [workstream_id],
+                "completion": {"terminalReceiptRequired": True},
+                "retryPolicy": "RECONCILE_BEFORE_RETRY",
+                "sideEffectClass": "READ_ONLY",
+                "maxAttempts": 1,
+                "maxExecutionMinutes": 45,
+                "dependsOn": [],
+                "readinessRule": "ALL_DEPENDENCIES_SUCCEEDED",
+                "status": "READY",
+                "createdAt": isoformat(datetime.now(UTC)),
+                "requiredSources": [
+                    {
+                        "kind": "DRIVE_ARTIFACT",
+                        "id": factory.bootstrap_doc_id,
+                        "title": "FACTORY_EXECUTOR_BOOTSTRAP-v1",
+                    },
+                    {
+                        "kind": "DRIVE_ARTIFACT",
+                        "id": start_here,
+                        "title": "START_HERE_PROJECT_FACTORY",
+                    },
+                    {
+                        "kind": "DRIVE_ARTIFACT",
+                        "id": prompt_id,
+                        "title": "PROMPT_ORCHESTRATOR",
+                    },
+                    *required_sources,
+                ],
+                "instructions": instructions,
+                "allowedWrites": {
+                    "stagingOnly": True,
+                    "expectedArtifactPattern": f"{change_id}-ORCHESTRATOR-PLAN-*.json",
+                    "receiptRequired": True,
+                },
+                "dedupeKey": dedupe,
+            }
+            request_id = self._upload_request(factory, dispatch_id, request)
+            now = isoformat(datetime.now(UTC))
+            self._append_queue_row(
+                [
+                    dispatch_id,
+                    root_run_id,
+                    generation,
+                    _CONTINUATION_AGENT,
+                    change_id,
+                    "AUTONOMOUS_WORKSTREAM_PLANNING",
+                    target_ref,
+                    "READY",
+                    int(workstream["priority"]),
+                    dedupe,
+                    "",
+                    0,
+                    1,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "RECONCILE_BEFORE_RETRY",
+                    "READ_ONLY",
+                    request_id,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    now,
+                    "",
+                    "",
+                    "",
+                    now,
+                ]
+            )
             return dispatch_id
         return None
