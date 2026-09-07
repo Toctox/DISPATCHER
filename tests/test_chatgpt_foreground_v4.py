@@ -60,8 +60,8 @@ def _wire_success(monkeypatch, launcher, events):
     )
     monkeypatch.setattr(
         GuardedForegroundChatGPTLauncher,
-        "_click_composer",
-        classmethod(lambda cls, hwnd: events.append(("click", hwnd))),
+        "_focus_composer_by_placeholder",
+        classmethod(lambda cls, hwnd: events.append(("focus_placeholder", hwnd))),
     )
     monkeypatch.setattr(
         GuardedForegroundChatGPTLauncher,
@@ -99,7 +99,7 @@ def _wire_success(monkeypatch, launcher, events):
     )
 
 
-def test_v4_forces_chat_rebinds_window_and_verifies_before_enter(
+def test_v5_forces_chat_focuses_placeholder_and_verifies_before_enter(
     monkeypatch, tmp_path, chatgpt_request
 ):
     events = []
@@ -108,21 +108,54 @@ def test_v4_forces_chat_rebinds_window_and_verifies_before_enter(
 
     result = launcher.launch(_job(), _request(chatgpt_request), "BOOTSTRAP")
 
-    assert result.launcher == "FOREGROUND_CHATGPT_DESKTOP_V4"
+    assert result.launcher == "FOREGROUND_CHATGPT_DESKTOP_V5"
     assert events.count(("ctrl_alt_n",)) == 1
     assert ("activate", 789) in events
-    assert ("click", 789) in events
+    assert ("focus_placeholder", 789) in events
+    assert events.index(("focus_placeholder", 789)) < events.index(("empty",))
     assert events.index(("empty",)) < events.index(("verify", "BOOTSTRAP"))
     assert events.index(("verify", "BOOTSTRAP")) < events.index(("enter",))
 
     phases = [item[1] for item in events if item[0] == "phase"]
     assert "CHAT_NEW_SHORTCUT_REQUESTED" in phases
     assert "CHAT_SURFACE_REACQUIRED" in phases
+    assert "COMPOSER_PLACEHOLDER_FOCUSED" in phases
     assert "EMPTY_COMPOSER_VERIFIED" in phases
     assert phases.index("BOOTSTRAP_VERIFIED") < phases.index("SEND_ATTEMPTED")
 
 
-def test_v4_never_enters_when_fresh_chat_proof_fails(
+def test_v5_never_enters_when_placeholder_focus_fails(
+    monkeypatch, tmp_path, chatgpt_request
+):
+    events = []
+    launcher = GuardedForegroundChatGPTLauncher(tmp_path)
+    _wire_success(monkeypatch, launcher, events)
+
+    def fail_focus(cls, hwnd):
+        events.append(("focus_failed", hwnd))
+        raise ForegroundLaunchError("CHATGPT_DESKTOP_COMPOSER_PLACEHOLDER_NOT_FOUND")
+
+    monkeypatch.setattr(
+        GuardedForegroundChatGPTLauncher,
+        "_focus_composer_by_placeholder",
+        classmethod(fail_focus),
+    )
+
+    try:
+        launcher.launch(_job(), _request(chatgpt_request), "BOOTSTRAP")
+    except ForegroundLaunchError as exc:
+        assert exc.code == "CHATGPT_DESKTOP_COMPOSER_PLACEHOLDER_NOT_FOUND"
+    else:
+        raise AssertionError("missing composer placeholder must abort before send")
+
+    assert ("enter",) not in events
+    assert ("ctrl_v",) not in events
+    phases = [item[1] for item in events if item[0] == "phase"]
+    assert "SEND_ATTEMPTED" not in phases
+    assert phases[-1] == "FAILED"
+
+
+def test_v5_never_enters_when_fresh_chat_proof_fails(
     monkeypatch, tmp_path, chatgpt_request
 ):
     events = []
