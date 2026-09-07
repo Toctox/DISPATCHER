@@ -4,6 +4,37 @@ globalThis.PFComposer = Object.freeze({
       .replace(/\r\n?/g, "\n")
       .replace(/[\u200B\uFEFF]/g, "");
   },
+  domRepresentation(element) {
+    if (!element?.childNodes || typeof element.childNodes[Symbol.iterator] !== "function") return null;
+    const blockTags = new Set(["P", "DIV", "LI", "PRE", "BLOCKQUOTE"]);
+    const readNode = node => {
+      if (!node) return "";
+      if (node.nodeType === 3) return node.nodeValue || "";
+      if (node.nodeType !== 1) return "";
+      const tag = String(node.tagName || "").toUpperCase();
+      if (tag === "BR") {
+        const className = typeof node.getAttribute === "function" ? (node.getAttribute("class") || "") : "";
+        if (className.split(/\s+/).includes("ProseMirror-trailingBreak")) return "";
+        return "\n";
+      }
+      let value = "";
+      if (node.childNodes && typeof node.childNodes[Symbol.iterator] === "function") {
+        for (const child of node.childNodes) value += readNode(child);
+      }
+      return value;
+    };
+    const children = Array.from(element.childNodes);
+    const hasBlockChildren = children.some(node =>
+      node?.nodeType === 1 && blockTags.has(String(node.tagName || "").toUpperCase())
+    );
+    if (!hasBlockChildren) return this.normalize(readNode(element));
+    const parts = children.map(node => {
+      const value = this.normalize(readNode(node));
+      const isBlock = node?.nodeType === 1 && blockTags.has(String(node.tagName || "").toUpperCase());
+      return isBlock ? value.replace(/\n$/, "") : value;
+    });
+    return this.normalize(parts.join("\n"));
+  },
   representations(element) {
     if (element.tagName === "TEXTAREA") return [this.normalize(element.value)];
     const contentEditable = element.getAttribute("contenteditable");
@@ -12,12 +43,13 @@ globalThis.PFComposer = Object.freeze({
     if (!editable) throw new Error("CHATGPT_SELECTOR_UNAVAILABLE");
     const inner = this.normalize(element.innerText);
     const text = this.normalize(element.textContent);
+    const dom = this.domRepresentation(element);
     // ChatGPT/ProseMirror represents an empty composer as a structural paragraph:
     // <p data-empty-paragraph="true" ...><br ...></p>. It is logically empty.
     const hasEmptyParagraph = typeof element.querySelector === "function" &&
       Boolean(element.querySelector('p[data-empty-paragraph="true"]'));
     if (text === "" && (inner.replace(/\n/g, "") === "" || hasEmptyParagraph)) return [""];
-    return [...new Set([inner, text])];
+    return [...new Set([inner, text, dom].filter(value => value !== null))];
   },
   read(element) {
     return this.representations(element)[0];
