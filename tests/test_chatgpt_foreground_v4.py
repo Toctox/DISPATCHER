@@ -20,13 +20,8 @@ def _request(chatgpt_request) -> DispatchRequest:
 def _wire_success(monkeypatch, launcher, events):
     monkeypatch.setattr(
         GuardedForegroundChatGPTLauncher,
-        "_find_chatgpt_window",
-        classmethod(lambda cls: 123),
-    )
-    monkeypatch.setattr(
-        GuardedForegroundChatGPTLauncher,
-        "_window_pid",
-        classmethod(lambda cls, hwnd: 456 if hwnd == 123 else 654),
+        "_open_or_find_chatgpt_window",
+        classmethod(lambda cls: (123, 456, True)),
     )
     monkeypatch.setattr(
         launcher,
@@ -45,18 +40,19 @@ def _wire_success(monkeypatch, launcher, events):
     )
     monkeypatch.setattr(
         GuardedForegroundChatGPTLauncher,
-        "_send_escape_once",
-        classmethod(lambda cls: events.append(("escape",))),
+        "_send_ctrl_n",
+        classmethod(lambda cls: events.append(("ctrl_n",))),
     )
-    monkeypatch.setattr(
-        GuardedForegroundChatGPTLauncher,
-        "_send_ctrl_alt_n",
-        classmethod(lambda cls: events.append(("ctrl_alt_n",))),
-    )
+    surfaces = iter([(789, 654), (790, 655), (791, 656)])
     monkeypatch.setattr(
         GuardedForegroundChatGPTLauncher,
         "_wait_for_foreground_chatgpt_surface",
-        classmethod(lambda cls: (789, 654)),
+        classmethod(lambda cls: next(surfaces)),
+    )
+    monkeypatch.setattr(
+        GuardedForegroundChatGPTLauncher,
+        "_send_alt_number",
+        classmethod(lambda cls, number: events.append(("alt", number))),
     )
     monkeypatch.setattr(
         GuardedForegroundChatGPTLauncher,
@@ -99,7 +95,7 @@ def _wire_success(monkeypatch, launcher, events):
     )
 
 
-def test_v5_forces_chat_focuses_placeholder_and_verifies_before_enter(
+def test_v6_runs_required_desktop_sequence_before_prompt(
     monkeypatch, tmp_path, chatgpt_request
 ):
     events = []
@@ -108,23 +104,32 @@ def test_v5_forces_chat_focuses_placeholder_and_verifies_before_enter(
 
     result = launcher.launch(_job(), _request(chatgpt_request), "BOOTSTRAP")
 
-    assert result.launcher == "FOREGROUND_CHATGPT_DESKTOP_V5"
-    assert events.count(("ctrl_alt_n",)) == 1
-    assert ("activate", 789) in events
-    assert ("focus_placeholder", 789) in events
-    assert events.index(("focus_placeholder", 789)) < events.index(("empty",))
-    assert events.index(("empty",)) < events.index(("verify", "BOOTSTRAP"))
-    assert events.index(("verify", "BOOTSTRAP")) < events.index(("enter",))
+    assert result.launcher == "FOREGROUND_CHATGPT_DESKTOP_V6"
+    ctrl_n = events.index(("ctrl_n",))
+    wait_6 = events.index(("sleep", 6.0))
+    alt_2 = events.index(("alt", 2))
+    wait_3_first = events.index(("sleep", 3.0))
+    alt_1 = events.index(("alt", 1))
+    wait_3_second = events.index(("sleep", 3.0), wait_3_first + 1)
+    focus = events.index(("focus_placeholder", 791))
+    verify = events.index(("verify", "BOOTSTRAP"))
+    enter = events.index(("enter",))
+
+    assert ctrl_n < wait_6 < alt_2 < wait_3_first < alt_1 < wait_3_second < focus
+    assert focus < events.index(("empty",)) < verify < enter
 
     phases = [item[1] for item in events if item[0] == "phase"]
-    assert "CHAT_NEW_SHORTCUT_REQUESTED" in phases
-    assert "CHAT_SURFACE_REACQUIRED" in phases
+    assert "APP_LAUNCHED" in phases
+    assert "CTRL_N_DISPATCHED" in phases
+    assert "ALT_2_DISPATCHED" in phases
+    assert "ALT_1_DISPATCHED" in phases
+    assert "DESKTOP_SEQUENCE_STABILIZED" in phases
     assert "COMPOSER_PLACEHOLDER_FOCUSED" in phases
     assert "EMPTY_COMPOSER_VERIFIED" in phases
     assert phases.index("BOOTSTRAP_VERIFIED") < phases.index("SEND_ATTEMPTED")
 
 
-def test_v5_never_enters_when_placeholder_focus_fails(
+def test_v6_never_enters_when_placeholder_focus_fails(
     monkeypatch, tmp_path, chatgpt_request
 ):
     events = []
@@ -155,7 +160,7 @@ def test_v5_never_enters_when_placeholder_focus_fails(
     assert phases[-1] == "FAILED"
 
 
-def test_v5_never_enters_when_fresh_chat_proof_fails(
+def test_v6_never_enters_when_fresh_chat_proof_fails(
     monkeypatch, tmp_path, chatgpt_request
 ):
     events = []
