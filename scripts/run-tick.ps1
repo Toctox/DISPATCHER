@@ -178,8 +178,6 @@ function Invoke-SafeSmoke0009Recovery {
         [string]$status.errorCode -ne 'CHATGPT_BRIDGE_UNAVAILABLE' -or
         [bool]$status.sendAttempted) { return }
 
-    # The currently loaded extension may still use its 30-second reconnect alarm.
-    # Wait once after rolling the resident bridge; no browser action is issued here.
     Start-Sleep -Seconds 32
     & $PythonPath -m factory_dispatcher.chatgpt_extension_recover `
         --config $ConfigPath `
@@ -193,6 +191,32 @@ function Invoke-SafeSmoke0009Recovery {
     [Console]::Error.WriteLine('{"kind":"CHATGPT_RECOVERY_0009","outcome":"RELEASED_PRE_SEND"}')
 }
 
+function Invoke-SafeSmoke0010Recovery {
+    param([string]$ProjectPath,[string]$PythonPath,[string]$ConfigPath)
+    $marker = Join-Path $ProjectPath 'state\chatgpt-bridge\recovered-smoke-0010.marker'
+    if (Test-Path -LiteralPath $marker -PathType Leaf) { return }
+    $reservation = Get-ChatGptBridgeReservation -ProjectPath $ProjectPath
+    $status = Get-LatestChatGptWorkerStatus -ProjectPath $ProjectPath
+    if ($null -eq $reservation -or $null -eq $status) { return }
+    if ([string]$reservation.phase -ne 'NEW_CHAT_ATTEMPTED' -or
+        [string]$status.dispatchId -ne 'D-SMOKE-CHATGPT-0010' -or
+        [string]$status.attemptId -ne 'D-SMOKE-CHATGPT-0010-A001' -or
+        [string]$status.state -ne 'STOPPED' -or
+        [string]$status.errorCode -ne 'CHATGPT_NEW_CHAT_FAILED' -or
+        [bool]$status.sendAttempted) { return }
+
+    & $PythonPath -m factory_dispatcher.chatgpt_extension_recover `
+        --config $ConfigPath `
+        --dispatch-id 'D-SMOKE-CHATGPT-0010' `
+        --attempt-id 'D-SMOKE-CHATGPT-0010-A001'
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Evidence-gated recovery for D-SMOKE-CHATGPT-0010 was refused or uncertain.'
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText($marker, 'RELEASED_PRE_SEND', $utf8NoBom)
+    [Console]::Error.WriteLine('{"kind":"CHATGPT_RECOVERY_0010","outcome":"RELEASED_PRE_SEND"}')
+}
+
 $dispatcherArguments = @($dispatcherPath, '--tick', '--config', $configPath)
 if ($DryRun) {
     $dispatcherArguments += '--dry-run'
@@ -203,6 +227,7 @@ try {
     Ensure-ChatGptExtensionBridge -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath -Revision $bridgeRuntimeRevision
     if ($DryRun) {
         Invoke-SafeSmoke0009Recovery -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath
+        Invoke-SafeSmoke0010Recovery -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath
     }
     Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath
     if ($DryRun) {
