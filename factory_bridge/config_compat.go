@@ -13,15 +13,16 @@ import (
 // pollIntervalMs when the current key is absent.
 func (c *Config) UnmarshalJSON(data []byte) error {
 	allowed := map[string]bool{
-		"bridgeRoot":        true,
-		"dispatcherWorkDir": true,
-		"dispatcherStart":   true,
-		"dispatcherTest":    true,
-		"allowGitPull":      true,
-		"allowGitPush":      true,
-		"commandTimeoutSec": true,
-		"pollIntervalMs":    true,
-		"pollSeconds":       true,
+		"bridgeRoot":         true,
+		"dispatcherWorkDir":  true,
+		"projectHubWorkDir":  true,
+		"dispatcherStart":    true,
+		"dispatcherTest":     true,
+		"allowGitPull":       true,
+		"allowGitPush":       true,
+		"commandTimeoutSec":  true,
+		"pollIntervalMs":     true,
+		"pollSeconds":        true,
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -35,6 +36,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	type wire struct {
 		BridgeRoot        string `json:"bridgeRoot"`
 		DispatcherWorkDir string `json:"dispatcherWorkDir"`
+		ProjectHubWorkDir string `json:"projectHubWorkDir"`
 		DispatcherStart   string `json:"dispatcherStart"`
 		DispatcherTest    string `json:"dispatcherTest"`
 		AllowGitPull      bool   `json:"allowGitPull"`
@@ -64,6 +66,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	*c = Config{
 		BridgeRoot:        w.BridgeRoot,
 		DispatcherWorkDir: w.DispatcherWorkDir,
+		ProjectHubWorkDir: w.ProjectHubWorkDir,
 		AllowGitPull:      w.AllowGitPull,
 		AllowGitPush:      w.AllowGitPush,
 		CommandTimeoutSec: w.CommandTimeoutSec,
