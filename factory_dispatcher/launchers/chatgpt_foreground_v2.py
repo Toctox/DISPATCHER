@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import time
+from pathlib import Path
 
 from ..models import DispatchJob, DispatchRequest
 from .base import LaunchResult
@@ -10,24 +13,25 @@ from .chatgpt_foreground import ForegroundChatGPTLauncher, ForegroundLaunchError
 class GuardedForegroundChatGPTLauncher(ForegroundChatGPTLauncher):
     """Fail-closed launcher for ordinary Chat in the unified desktop app.
 
-    The unified app has distinct Chat and Work surfaces. A generic New Chat action
-    can inherit Work, so the Factory first invokes the documented Windows new-chat
-    shortcut (Ctrl+Alt+N), then reacquires and proves that the foreground surface is
-    owned by ChatGPT.exe. Only after a long stabilization period does it touch the
-    composer. Enter remains one-shot and is forbidden until both the empty-composer
-    proof and exact bootstrap copy-back proof have succeeded.
+    The unified app has distinct Chat and Work surfaces. The Factory first invokes
+    the ordinary new-chat shortcut, reacquires the ChatGPT foreground surface, then
+    locates the composer through Windows UI Automation by its visible placeholder
+    ("Mensagem para o ChatGPT" / "Message ChatGPT"). It never guesses composer
+    coordinates. Enter remains one-shot and is forbidden until the empty-composer
+    proof and exact bootstrap copy-back proof have both succeeded.
     """
 
-    launcher_name = "FOREGROUND_CHATGPT_DESKTOP_V4"
+    launcher_name = "FOREGROUND_CHATGPT_DESKTOP_V5"
 
     _ACTIVATION_WAIT_SECONDS = 2.0
     _CHAT_SURFACE_WAIT_SECONDS = 8.0
     _POST_REACQUIRE_WAIT_SECONDS = 2.0
-    _COMPOSER_FOCUS_WAIT_SECONDS = 2.0
+    _COMPOSER_FOCUS_WAIT_SECONDS = 1.0
     _PASTE_SETTLE_SECONDS = 2.25
     _COPY_SETTLE_SECONDS = 0.50
     _FOREGROUND_REACQUIRE_ATTEMPTS = 20
     _FOREGROUND_REACQUIRE_INTERVAL_SECONDS = 0.25
+    _COMPOSER_HELPER_TIMEOUT_SECONDS = 12.0
 
     def launch(
         self,
@@ -55,8 +59,6 @@ class GuardedForegroundChatGPTLauncher(ForegroundChatGPTLauncher):
             self._ensure_foreground_chatgpt(hwnd, pid)
             self._record_phase(job, hwnd, pid, "FOREGROUND_CONFIRMED", send_attempted=False)
 
-            # Close transient menus first. The ordinary new-chat shortcut is used
-            # specifically so a Work session cannot silently supply the next target.
             self._send_escape_once()
             time.sleep(0.75)
             self._ensure_foreground_chatgpt(hwnd, pid)
@@ -64,9 +66,8 @@ class GuardedForegroundChatGPTLauncher(ForegroundChatGPTLauncher):
             self._record_phase(job, hwnd, pid, "CHAT_NEW_SHORTCUT_REQUESTED", send_attempted=False)
             time.sleep(self._CHAT_SURFACE_WAIT_SECONDS)
 
-            # Ctrl+Alt+N may replace the HWND or activate another ChatGPT.exe window.
-            # Rebind only to the *current foreground* ChatGPT surface; never continue
-            # typing into the old Work/agent window by assumption.
+            # The shortcut can replace HWND/PID. Continue only on the ChatGPT.exe
+            # window that is actually in foreground after the transition.
             hwnd, pid = self._wait_for_foreground_chatgpt_surface()
             self._activate_and_maximize(hwnd)
             time.sleep(self._POST_REACQUIRE_WAIT_SECONDS)
@@ -78,13 +79,14 @@ class GuardedForegroundChatGPTLauncher(ForegroundChatGPTLauncher):
             self._ensure_foreground_chatgpt(hwnd, pid)
             self._record_phase(job, hwnd, pid, "NEW_CHAT_STABILIZED", send_attempted=False)
 
-            self._click_composer(hwnd)
+            # Critical last mile: do not click a coordinate. Search the Windows UIA
+            # tree for the edit control exposed as "Mensagem para o ChatGPT" and
+            # require that exact control to hold keyboard focus.
+            self._focus_composer_by_placeholder(hwnd)
             time.sleep(self._COMPOSER_FOCUS_WAIT_SECONDS)
             self._ensure_foreground_chatgpt(hwnd, pid)
-            self._record_phase(job, hwnd, pid, "COMPOSER_CLICKED", send_attempted=False)
+            self._record_phase(job, hwnd, pid, "COMPOSER_PLACEHOLDER_FOCUSED", send_attempted=False)
 
-            # Fresh-chat proof. If the target still contains prior text, fail before
-            # writing anything and leave the queue for reconciliation.
             self._verify_empty_composer()
             self._record_phase(job, hwnd, pid, "EMPTY_COMPOSER_VERIFIED", send_attempted=False)
 
@@ -101,7 +103,6 @@ class GuardedForegroundChatGPTLauncher(ForegroundChatGPTLauncher):
             time.sleep(0.5)
             self._ensure_foreground_chatgpt(hwnd, pid)
 
-            # One-way boundary: from this point an external send may have occurred.
             send_attempted = True
             self._record_phase(job, hwnd, pid, "SEND_ATTEMPTED", send_attempted=True)
             self._send_enter_once()
@@ -111,9 +112,9 @@ class GuardedForegroundChatGPTLauncher(ForegroundChatGPTLauncher):
                 launcher=self.launcher_name,
                 pid=pid,
                 detail=(
-                    "Ctrl+Alt+N ordinary Chat requested; foreground ChatGPT surface reacquired; "
-                    "8s+ stabilization; empty composer verified; exact bootstrap verified; "
-                    "single Enter attempted"
+                    "ordinary Chat requested; foreground ChatGPT surface reacquired; "
+                    "composer focused by Mensagem para o ChatGPT placeholder; empty composer "
+                    "verified; exact bootstrap verified; single Enter attempted"
                 ),
             )
         except ForegroundLaunchError as exc:
@@ -150,6 +151,58 @@ class GuardedForegroundChatGPTLauncher(ForegroundChatGPTLauncher):
         raise ForegroundLaunchError("CHATGPT_DESKTOP_CHAT_SURFACE_NOT_FOREGROUND")
 
     @classmethod
+    def _focus_composer_by_placeholder(cls, hwnd: int) -> None:
+        helper = Path(__file__).resolve().parents[2] / "scripts" / "chatgpt-focus-composer.ps1"
+        if not helper.is_file():
+            raise ForegroundLaunchError("CHATGPT_DESKTOP_COMPOSER_HELPER_NOT_FOUND")
+        try:
+            completed = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(helper),
+                    "-Hwnd",
+                    str(int(hwnd)),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=cls._COMPOSER_HELPER_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ForegroundLaunchError("CHATGPT_DESKTOP_COMPOSER_UIA_FAILED") from exc
+
+        if completed.returncode != 0:
+            detail = f"{completed.stderr}\n{completed.stdout}"
+            known = (
+                "CHATGPT_DESKTOP_UIA_ROOT_NOT_FOUND",
+                "CHATGPT_DESKTOP_COMPOSER_PLACEHOLDER_NOT_FOUND",
+                "CHATGPT_DESKTOP_COMPOSER_PLACEHOLDER_AMBIGUOUS",
+                "CHATGPT_DESKTOP_COMPOSER_FOCUS_FAILED",
+            )
+            for code in known:
+                if code in detail:
+                    raise ForegroundLaunchError(code)
+            raise ForegroundLaunchError("CHATGPT_DESKTOP_COMPOSER_UIA_FAILED")
+
+        try:
+            payload = json.loads(completed.stdout.strip())
+        except (TypeError, ValueError) as exc:
+            raise ForegroundLaunchError("CHATGPT_DESKTOP_COMPOSER_UIA_INVALID_RESULT") from exc
+        if (
+            not isinstance(payload, dict)
+            or payload.get("status") != "OK"
+            or payload.get("kind") != "CHATGPT_DESKTOP_COMPOSER_FOCUS"
+            or payload.get("hasKeyboardFocus") is not True
+        ):
+            raise ForegroundLaunchError("CHATGPT_DESKTOP_COMPOSER_FOCUS_FAILED")
+
+    @classmethod
     def _verify_empty_composer(cls) -> None:
         sentinel = "PF_EMPTY_COMPOSER_PROBE"
         cls._set_clipboard_text(sentinel)
@@ -157,7 +210,5 @@ class GuardedForegroundChatGPTLauncher(ForegroundChatGPTLauncher):
         cls._send_ctrl_c()
         time.sleep(cls._COPY_SETTLE_SECONDS)
         observed = cls._get_clipboard_text()
-        # If copy leaves the sentinel intact there was no selectable composer text.
-        # Chromium may alternatively place an explicit empty Unicode string.
         if observed not in {sentinel, ""}:
             raise ForegroundLaunchError("CHATGPT_DESKTOP_COMPOSER_NOT_EMPTY")
