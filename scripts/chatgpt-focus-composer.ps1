@@ -13,15 +13,15 @@ function Normalize-PFText {
     param([string]$Value)
     if ($null -eq $Value) { return '' }
     $normalized = $Value.Trim().ToLowerInvariant()
-    $normalized = $normalized.Normalize([Text.NormalizationForm]::FormD)
-    $builder = New-Object Text.StringBuilder
+    $normalized = $normalized.Normalize([System.Text.NormalizationForm]::FormD)
+    $builder = New-Object System.Text.StringBuilder
     foreach ($ch in $normalized.ToCharArray()) {
-        $category = [Globalization.CharUnicodeInfo]::GetUnicodeCategory($ch)
-        if ($category -ne [Globalization.UnicodeCategory]::NonSpacingMark) {
+        $category = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($ch)
+        if ($category -ne [System.Globalization.UnicodeCategory]::NonSpacingMark) {
             [void]$builder.Append($ch)
         }
     }
-    return $builder.ToString().Normalize([Text.NormalizationForm]::FormC)
+    return $builder.ToString().Normalize([System.Text.NormalizationForm]::FormC)
 }
 
 $allowed = @(
@@ -35,27 +35,33 @@ try {
         throw 'CHATGPT_DESKTOP_UIA_ROOT_NOT_FOUND'
     }
 
-    $condition = New-Object Windows.Automation.PropertyCondition(
-        [Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [Windows.Automation.ControlType]::Edit
+    # Chromium/WebView2 may expose a contenteditable composer as Edit or another
+    # focusable control. Resolve by the user-visible accessible placeholder instead
+    # of relying on a control type or screen coordinate.
+    $elements = $root.FindAll(
+        [Windows.Automation.TreeScope]::Descendants,
+        [Windows.Automation.Condition]::TrueCondition
     )
-    $elements = $root.FindAll([Windows.Automation.TreeScope]::Descendants, $condition)
 
     $matches = @()
     foreach ($element in $elements) {
-        $name = [string]$element.Current.Name
-        $help = [string]$element.Current.HelpText
-        $automationId = [string]$element.Current.AutomationId
-        $candidates = @($name, $help, $automationId) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        $matched = $false
-        foreach ($candidate in $candidates) {
-            if ($allowed -contains (Normalize-PFText $candidate)) {
-                $matched = $true
-                break
+        try {
+            if ($element.Current.IsOffscreen -or -not $element.Current.IsEnabled -or -not $element.Current.IsKeyboardFocusable) {
+                continue
+            }
+            $name = [string]$element.Current.Name
+            $help = [string]$element.Current.HelpText
+            $automationId = [string]$element.Current.AutomationId
+            $candidates = @($name, $help, $automationId) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            foreach ($candidate in $candidates) {
+                if ($allowed -contains (Normalize-PFText $candidate)) {
+                    $matches += $element
+                    break
+                }
             }
         }
-        if ($matched) {
-            $matches += $element
+        catch [System.Windows.Automation.ElementNotAvailableException] {
+            continue
         }
     }
 
@@ -68,7 +74,7 @@ try {
 
     $target = $matches[0]
     $target.SetFocus()
-    Start-Sleep -Milliseconds 250
+    Start-Sleep -Milliseconds 350
 
     if (-not $target.Current.HasKeyboardFocus) {
         throw 'CHATGPT_DESKTOP_COMPOSER_FOCUS_FAILED'
