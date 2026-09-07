@@ -43,11 +43,12 @@ export class Controller {
     if (!exactKeys(value, keys) || value.status !== "OK") fail();
     return value;
   }
-  async inspect(expected, preparedRegistration = null) {
+  async inspect(expected, preparedRegistration = null, prepare = false) {
     const registration = preparedRegistration || await this.registry.registered();
     if (expected && (expected.tabId !== registration.factoryTabId ||
         expected.browserInstanceId !== registration.browserInstanceId)) fail("CHATGPT_BINDING_CHANGED");
-    const page = await this.content(registration.factoryTabId, {action: "PRECHECK"});
+    const page = await this.content(registration.factoryTabId,
+      prepare ? {action: "PRECHECK", prepare: true} : {action: "PRECHECK"});
     const current = await this.registry.registered();
     if (current.factoryTabId !== registration.factoryTabId) fail("CHATGPT_BINDING_CHANGED");
     const binding = {extensionId: this.api.runtime.id, browserInstanceId: this.instanceId,
@@ -90,14 +91,11 @@ export class Controller {
       if (["PRECHECK", "NEW_CHAT"].includes(value.action) && active) fail("CHATGPT_TAB_BUSY");
       if (value.action === "PRECHECK") {
         // The launcher's unpinned PRECHECK may normalize the dedicated Factory Tab.
-        // Finish all navigation/draft clearing before binding is observed or the queue is claimed.
-        // The worker's pinned PRECHECK remains strictly read-only.
+        // All new-chat preparation happens inside that one PRECHECK before the binding is
+        // observed or the queue is claimed. The worker's pinned PRECHECK is read-only.
         const unpinned = !("binding" in value);
         const prepared = unpinned ? await this.registry.prepareRoot() : null;
-        if (unpinned) {
-          await this.content(prepared.factoryTabId, {action: "PREPARE_NEW_CHAT"});
-        }
-        return {binding: await this.inspect(value.binding, prepared)};
+        return {binding: await this.inspect(value.binding, prepared, unpinned)};
       }
       if (value.action !== "NEW_CHAT") {
         if (!active || active.reservationId !== value.reservationId ||
