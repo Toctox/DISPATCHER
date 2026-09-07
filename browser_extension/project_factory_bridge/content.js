@@ -105,6 +105,25 @@
     };
   }
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  async function prepareNewChatSurface() {
+    // This action is invoked only by the unpinned launcher PRECHECK, before claim and
+    // before any reservation exists. It may normalize UI state, but never sends text.
+    precheck();
+    if (isNewChatPath(location.pathname) && !location.search && !location.hash &&
+        PFComposer.read(control("composer")) === "") return;
+    control("newChat").click();
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      try {
+        if (isNewChatPath(location.pathname) && !location.search && !location.hash &&
+            PFComposer.read(control("composer")) === "") return;
+      } catch (error) {
+        if (error.message !== "CHATGPT_SELECTOR_UNAVAILABLE") throw error;
+      }
+      await delay(100);
+    }
+    fail("CHATGPT_NEW_CHAT_FAILED");
+  }
   async function sendByEnter(editor, bootstrap, value) {
     // Real Chrome has KeyboardEvent. The button fallback exists only for old/test runtimes
     // that lack KeyboardEvent; never fall back after an Enter has been attempted.
@@ -138,11 +157,15 @@
     if (busy) fail("CHATGPT_TAB_BUSY");
     busy = true;
     try {
-      if (!value || !["PRECHECK", "NEW_CHAT", "INSERT_BOOTSTRAP", "SEND", "DOM_DIAGNOSTIC_OPTIONS"].includes(value.action)) {
+      if (!value || !["PRECHECK", "PREPARE_NEW_CHAT", "NEW_CHAT", "INSERT_BOOTSTRAP", "SEND", "DOM_DIAGNOSTIC_OPTIONS"].includes(value.action)) {
         fail("CHATGPT_PROTOCOL_INVALID");
       }
       if (value.action === "DOM_DIAGNOSTIC_OPTIONS") {
         return {status: "OK", diagnostic: structuralDiagnostic()};
+      }
+      if (value.action === "PREPARE_NEW_CHAT") {
+        await prepareNewChatSurface();
+        return {status: "OK"};
       }
       if (value.action === "PRECHECK") {
         precheck();
