@@ -11,7 +11,12 @@ from .engine import Dispatcher
 from .errors import DispatcherError
 from .google_auth import build_google_services
 from .google_gateway import GoogleWorkspaceGateway
-from .launchers import BrowserChatGPTLauncher, CodexLauncher, ManualChatGPTLauncher
+from .launchers import (
+    BrowserChatGPTLauncher,
+    CodexLauncher,
+    ForegroundChatGPTLauncher,
+    ManualChatGPTLauncher,
+)
 from .launchers.chatgpt_extension import ExtensionChatGPTLauncher
 from .models import ExecutorType
 from .mutex import LocalMutex, MutexBusyError
@@ -27,6 +32,13 @@ def build_launchers(settings, config_file: Path):
     )
     if settings.chatgpt_browser_mode == "EXTENSION_BRIDGE":
         chatgpt = ExtensionChatGPTLauncher(settings, config_file=config_file)
+
+    # Force-brute desktop mode: when the official Windows ChatGPT app is already
+    # open, prefer the closed foreground launcher. If the app is not open, retain
+    # the configured browser/extension launcher unchanged.
+    if ForegroundChatGPTLauncher.available():
+        chatgpt = ForegroundChatGPTLauncher(settings.state_directory)
+
     return {
         ExecutorType.CHATGPT: chatgpt,
         ExecutorType.CODEX: CodexLauncher(
