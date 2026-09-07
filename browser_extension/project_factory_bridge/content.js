@@ -144,14 +144,14 @@
         PFComposer.insert(control("composer"), value.bootstrap);
         await delay(100);
         requireBinding(value);
-        if (PFComposer.read(control("composer")) !== value.bootstrap) fail("CHATGPT_BOOTSTRAP_MISMATCH");
+        if (!PFComposer.matches(control("composer"), value.bootstrap)) fail("CHATGPT_BOOTSTRAP_MISMATCH");
         expectedBootstrap = value.bootstrap;
         phase = "INSERT_BOOTSTRAP";
         return {status: "OK"};
       }
       if (phase !== "INSERT_BOOTSTRAP") fail("CHATGPT_RESERVATION_INVALID");
       phase = "SEND_ATTEMPTED";
-      if (PFComposer.read(control("composer")) !== expectedBootstrap) fail("CHATGPT_BOOTSTRAP_MISMATCH");
+      if (!PFComposer.matches(control("composer"), expectedBootstrap)) fail("CHATGPT_BOOTSTRAP_MISMATCH");
       const button = control("send");
       requireBinding(value);
       if (!Number.isSafeInteger(value.expiresAt) || Date.now() >= value.expiresAt) fail("CHATGPT_SEND_UNCERTAIN");
