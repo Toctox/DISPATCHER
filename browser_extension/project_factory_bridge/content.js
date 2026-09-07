@@ -97,6 +97,15 @@
     };
   }
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  async function waitForControl(kind, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const found = candidates(kind);
+      if (found.length === 1) return found[0];
+      await delay(100);
+    }
+    fail("CHATGPT_SELECTOR_UNAVAILABLE");
+  }
   async function execute(value) {
     if (busy) fail("CHATGPT_TAB_BUSY");
     busy = true;
@@ -117,10 +126,17 @@
         reservationId = value.reservationId;
         phase = "NEW_CHAT_ATTEMPTED";
         expectedBootstrap = null;
-        if (isNewChatPath(location.pathname) && !location.search && !location.hash &&
-            PFComposer.read(control("composer")) === "") {
-          phase = "NEW_CHAT";
-          return {status: "OK"};
+        if (isNewChatPath(location.pathname) && !location.search && !location.hash) {
+          const composer = control("composer");
+          if (PFComposer.read(composer) !== "" && typeof PFComposer.clear === "function") {
+            PFComposer.clear(composer);
+            await delay(100);
+            requireBinding(value);
+          }
+          if (PFComposer.read(control("composer")) === "") {
+            phase = "NEW_CHAT";
+            return {status: "OK"};
+          }
         }
         allowedNewChatNavigation = true;
         control("newChat").click();
@@ -128,13 +144,19 @@
         while (Date.now() < deadline) {
           requireBinding(value);
           try {
-            if (isNewChatPath(location.pathname) && PFComposer.read(control("composer")) === "") {
-              phase = "NEW_CHAT";
-              allowedNewChatNavigation = false;
-              return {status: "OK"};
+            if (isNewChatPath(location.pathname)) {
+              const composer = control("composer");
+              if (PFComposer.read(composer) !== "" && typeof PFComposer.clear === "function") {
+                PFComposer.clear(composer);
+              }
+              if (PFComposer.read(control("composer")) === "") {
+                phase = "NEW_CHAT";
+                allowedNewChatNavigation = false;
+                return {status: "OK"};
+              }
             }
           } catch (error) {
-            if (error.message !== "CHATGPT_SELECTOR_UNAVAILABLE") throw error;
+            if (!["CHATGPT_SELECTOR_UNAVAILABLE", "CHATGPT_BOOTSTRAP_MISMATCH"].includes(error.message)) throw error;
           }
           await delay(100);
         }
@@ -153,11 +175,11 @@
         return {status: "OK"};
       }
       if (phase !== "INSERT_BOOTSTRAP") fail("CHATGPT_RESERVATION_INVALID");
-      phase = "SEND_ATTEMPTED";
       if (!composerMatches(control("composer"), expectedBootstrap)) fail("CHATGPT_BOOTSTRAP_MISMATCH");
-      const button = control("send");
+      const button = await waitForControl("send", 5000);
       requireBinding(value);
       if (!Number.isSafeInteger(value.expiresAt) || Date.now() >= value.expiresAt) fail("CHATGPT_SEND_UNCERTAIN");
+      phase = "SEND_ATTEMPTED";
       expectedBootstrap = null;
       button.click();
       return {status: "OK"};
