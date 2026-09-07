@@ -7,7 +7,8 @@ globalThis.PFSelectors = Object.freeze({
     'a[aria-label="Novo chat"]', 'button[aria-label="Novo chat"]'],
   composer: ['textarea[data-testid="prompt-textarea"]', 'textarea#prompt-textarea',
     '[data-testid="prompt-textarea"][contenteditable]', '#prompt-textarea[contenteditable]'],
-  send: ['button[data-testid="send-button"]', 'button[aria-label="Send prompt"]',
+  send: ['button#composer-submit-button[data-testid="send-button"]',
+    'button[data-testid="send-button"]', 'button[aria-label="Send prompt"]',
     'button[aria-label="Enviar prompt"]']
 });
 
