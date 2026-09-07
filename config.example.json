@@ -5,6 +5,7 @@
   "stateDirectory": "state",
   "claimOwner": "",
   "writesEnabled": false,
+  "chatGptExecutionMode": "FOREGROUND_DESKTOP",
   "manualChatGptLaunchEnabled": false,
   "browserChatGptLaunchEnabled": false,
   "chatGptBrowserMode": "EXTENSION_BRIDGE",
