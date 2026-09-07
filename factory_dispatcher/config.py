@@ -13,6 +13,16 @@ DEFAULT_SCOPES = (
     "https://www.googleapis.com/auth/drive",
 )
 
+CHATGPT_EXECUTION_MODES = frozenset(
+    {
+        "AUTO",
+        "FOREGROUND_DESKTOP",
+        "EXTENSION_BRIDGE",
+        "BROWSER",
+        "MANUAL",
+    }
+)
+
 
 @dataclass(frozen=True)
 class LocalSettings:
@@ -28,6 +38,7 @@ class LocalSettings:
     chatgpt_url: str
     codex_executable: str
     google_scopes: tuple[str, ...]
+    chatgpt_execution_mode: str = "AUTO"
     browser_chatgpt_launch_enabled: bool = False
     chatgpt_browser_executable: str = ""
     chatgpt_browser_profile_directory: Path | None = None
@@ -148,6 +159,13 @@ def load_local_settings(path: Path) -> LocalSettings:
             raise ConfigurationError(f"{key} must be an integer between 1 and {maximum}")
         return value
 
+    execution_mode = str(data.get("chatGptExecutionMode") or "AUTO").strip().upper()
+    if execution_mode not in CHATGPT_EXECUTION_MODES:
+        allowed = ", ".join(sorted(CHATGPT_EXECUTION_MODES))
+        raise ConfigurationError(
+            f"chatGptExecutionMode must be one of: {allowed}"
+        )
+
     return LocalSettings(
         project_root=project_root,
         spreadsheet_id=spreadsheet_id,
@@ -163,6 +181,7 @@ def load_local_settings(path: Path) -> LocalSettings:
         chatgpt_url=str(data.get("chatGptUrl") or "https://chatgpt.com/").strip(),
         codex_executable=str(data.get("codexExecutable") or "codex").strip(),
         google_scopes=scopes,
+        chatgpt_execution_mode=execution_mode,
         browser_chatgpt_launch_enabled=data.get("browserChatGptLaunchEnabled") is True,
         chatgpt_browser_executable=str(data.get("chatGptBrowserExecutable") or "").strip(),
         chatgpt_browser_profile_directory=(
