@@ -8,6 +8,7 @@ on:
       - 'scripts/**'
       - 'tests/test_chatgpt_extension.py'
       - 'tests/test_chatgpt_bridge_resilience.py'
+      - 'tests/test_chatgpt_foreground.py'
       - 'requirements*.txt'
       - '.github/workflows/dispatcher-python.yml'
   pull_request:
@@ -16,6 +17,7 @@ on:
       - 'scripts/**'
       - 'tests/test_chatgpt_extension.py'
       - 'tests/test_chatgpt_bridge_resilience.py'
+      - 'tests/test_chatgpt_foreground.py'
       - 'requirements*.txt'
       - '.github/workflows/dispatcher-python.yml'
   workflow_dispatch:
@@ -53,3 +55,8 @@ jobs:
           python -m pytest tests/test_chatgpt_extension.py -q -k "not test_manifest_permissions_and_no_remote_control and not test_codex_and_cdp_implementation_files_unchanged"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pytest tests/test_chatgpt_bridge_resilience.py -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Foreground launcher regression tests
+        shell: pwsh
+        run: |
+          python -m pytest tests/test_chatgpt_foreground.py -q
