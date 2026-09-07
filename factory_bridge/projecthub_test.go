@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProjectHubStatusUsesOnlyLocalAllowlistedInputs(t *testing.T) {
@@ -194,6 +195,135 @@ func TestProjectHubTestFailsClosedWithoutSolution(t *testing.T) {
 	}
 	if len(f.specs) != 0 {
 		t.Fatalf("runner invoked %d times", len(f.specs))
+	}
+}
+
+func makeProjectHubServerProject(t *testing.T) string {
+	t.Helper()
+	workDir := t.TempDir()
+	projectDir := filepath.Join(workDir, "src", "ProjectHub.Server")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "ProjectHub.Server.csproj"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return workDir
+}
+
+func TestProjectHubStartUsesOnlyFixedDotnetCommandAndHealth(t *testing.T) {
+	workDir := makeProjectHubServerProject(t)
+	bridgeRoot := t.TempDir()
+	oldProbe := projectHubHealthProbe
+	oldStart := projectHubStartProcess
+	defer func() {
+		projectHubHealthProbe = oldProbe
+		projectHubStartProcess = oldStart
+	}()
+
+	probeCalls := 0
+	projectHubHealthProbe = func() bool {
+		probeCalls++
+		return probeCalls >= 2
+	}
+	var got runSpec
+	projectHubStartProcess = func(root string, spec runSpec) (int, error) {
+		if root != bridgeRoot {
+			t.Fatalf("bridgeRoot=%q", root)
+		}
+		got = spec
+		return 4321, nil
+	}
+
+	res := executeAction(Config{BridgeRoot: bridgeRoot, ProjectHubWorkDir: workDir}, Command{ID: "PH-START-1", Action: "projecthub.start"}, &fakeRunner{})
+	if res.Status != "ok" || res.ExitCode == nil || *res.ExitCode != 0 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if res.Meta["applicationRunning"] != true || res.Meta["startState"] != "started" || res.Meta["pid"] != 4321 {
+		t.Fatalf("unexpected meta: %+v", res.Meta)
+	}
+	if got.exe != "dotnet.exe" || got.dir != workDir {
+		t.Fatalf("unexpected spec: %+v", got)
+	}
+	args := strings.Join(got.args, " ")
+	expected := "run --project src/ProjectHub.Server --configuration Release --no-build --no-launch-profile --urls " + projectHubDefaultURL
+	if args != expected {
+		t.Fatalf("args=%q", args)
+	}
+}
+
+func TestProjectHubStartIsIdempotentWhenAlreadyHealthy(t *testing.T) {
+	workDir := makeProjectHubServerProject(t)
+	oldProbe := projectHubHealthProbe
+	oldStart := projectHubStartProcess
+	defer func() {
+		projectHubHealthProbe = oldProbe
+		projectHubStartProcess = oldStart
+	}()
+
+	projectHubHealthProbe = func() bool { return true }
+	projectHubStartProcess = func(string, runSpec) (int, error) {
+		t.Fatal("start process should not be called")
+		return 0, nil
+	}
+	res := executeAction(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: workDir}, Command{ID: "PH-START-2", Action: "projecthub.start"}, &fakeRunner{})
+	if res.Status != "ok" || res.Meta["startState"] != "already_running" || res.Meta["applicationRunning"] != true {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+func TestProjectHubStartFailsClosedWithoutServerProject(t *testing.T) {
+	oldProbe := projectHubHealthProbe
+	projectHubHealthProbe = func() bool { return false }
+	defer func() { projectHubHealthProbe = oldProbe }()
+	res := executeAction(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: t.TempDir()}, Command{ID: "PH-START-3", Action: "projecthub.start"}, &fakeRunner{})
+	if res.Status != "failed" || res.Error != "ProjectHub.Server project is unavailable" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+func TestProjectHubStartReportsStartFailure(t *testing.T) {
+	workDir := makeProjectHubServerProject(t)
+	oldProbe := projectHubHealthProbe
+	oldStart := projectHubStartProcess
+	defer func() {
+		projectHubHealthProbe = oldProbe
+		projectHubStartProcess = oldStart
+	}()
+	projectHubHealthProbe = func() bool { return false }
+	projectHubStartProcess = func(string, runSpec) (int, error) { return 0, errors.New("boom") }
+	res := executeAction(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: workDir}, Command{ID: "PH-START-4", Action: "projecthub.start"}, &fakeRunner{})
+	if res.Status != "failed" || res.Meta["startState"] != "start_failed" || !strings.Contains(res.Error, "boom") {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+func TestProjectHubStartKillsProcessWhenHealthNeverAppears(t *testing.T) {
+	workDir := makeProjectHubServerProject(t)
+	oldProbe := projectHubHealthProbe
+	oldStart := projectHubStartProcess
+	oldKill := projectHubKillProcess
+	oldTimeout := projectHubStartupTimeout
+	oldSleep := projectHubSleep
+	defer func() {
+		projectHubHealthProbe = oldProbe
+		projectHubStartProcess = oldStart
+		projectHubKillProcess = oldKill
+		projectHubStartupTimeout = oldTimeout
+		projectHubSleep = oldSleep
+	}()
+	projectHubHealthProbe = func() bool { return false }
+	projectHubStartProcess = func(string, runSpec) (int, error) { return 9876, nil }
+	projectHubStartupTimeout = time.Nanosecond
+	projectHubSleep = func(time.Duration) {}
+	killed := 0
+	projectHubKillProcess = func(pid int) error {
+		killed = pid
+		return nil
+	}
+	res := executeAction(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: workDir}, Command{ID: "PH-START-5", Action: "projecthub.start"}, &fakeRunner{})
+	if res.Status != "failed" || res.Meta["startState"] != "health_failed" || killed != 9876 || res.Meta["processKilled"] != true {
+		t.Fatalf("unexpected result: %+v killed=%d", res, killed)
 	}
 }
 

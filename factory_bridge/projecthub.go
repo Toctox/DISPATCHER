@@ -6,12 +6,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
 const projectHubDefaultURL = "http://127.0.0.1:5080"
+
+var projectHubStartupTimeout = 30 * time.Second
+var projectHubSleep = time.Sleep
 
 var projectHubHealthProbe = func() bool {
 	client := &http.Client{Timeout: 1500 * time.Millisecond}
@@ -21,6 +25,42 @@ var projectHubHealthProbe = func() bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+var projectHubStartProcess = func(bridgeRoot string, spec runSpec) (int, error) {
+	statusDir := filepath.Join(bridgeRoot, "00_STATUS")
+	if err := os.MkdirAll(statusDir, 0o755); err != nil {
+		return 0, err
+	}
+	stdoutLog, err := os.OpenFile(filepath.Join(statusDir, "projecthub-server.stdout.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	defer stdoutLog.Close()
+	stderrLog, err := os.OpenFile(filepath.Join(statusDir, "projecthub-server.stderr.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	defer stderrLog.Close()
+
+	process := exec.Command(spec.exe, spec.args...)
+	process.Dir = spec.dir
+	process.Stdout = stdoutLog
+	process.Stderr = stderrLog
+	if err := process.Start(); err != nil {
+		return 0, err
+	}
+	pid := process.Process.Pid
+	_ = process.Process.Release()
+	return pid, nil
+}
+
+var projectHubKillProcess = func(pid int) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return process.Kill()
 }
 
 func executeProjectHubStatus(cfg Config, cmd Command, start time.Time, r runner) Result {
@@ -229,6 +269,100 @@ func executeProjectHubTest(cfg Config, cmd Command, start time.Time, r runner) R
 	res.Meta["test"] = "ok"
 	res.Status = "ok"
 	res.Output = "test=ok configuration=Release"
+	finish(&res, start)
+	return res
+}
+
+func executeProjectHubStart(cfg Config, cmd Command, start time.Time) Result {
+	res := baseResult(cmd, start)
+	res.LogicalCommand = "dotnet run --project src/ProjectHub.Server --configuration Release --no-build --no-launch-profile --urls http://127.0.0.1:5080"
+	res.Meta["project"] = "ProjectHub"
+	res.Meta["configuration"] = "Release"
+	res.Meta["applicationUrl"] = projectHubDefaultURL
+	res.Meta["applicationRunning"] = false
+	res.Meta["startState"] = "not_started"
+
+	bridgeRoot := strings.TrimSpace(cfg.BridgeRoot)
+	if bridgeRoot == "" {
+		res.Error = "bridgeRoot is not configured"
+		finish(&res, start)
+		return res
+	}
+	workDir := strings.TrimSpace(cfg.ProjectHubWorkDir)
+	if workDir == "" {
+		res.Error = "projectHubWorkDir is not configured"
+		finish(&res, start)
+		return res
+	}
+	stat, err := os.Stat(workDir)
+	if err != nil || !stat.IsDir() {
+		res.Error = "projectHubWorkDir is unavailable"
+		finish(&res, start)
+		return res
+	}
+	projectFile := filepath.Join(workDir, "src", "ProjectHub.Server", "ProjectHub.Server.csproj")
+	if stat, err := os.Stat(projectFile); err != nil || stat.IsDir() {
+		res.Error = "ProjectHub.Server project is unavailable"
+		finish(&res, start)
+		return res
+	}
+
+	if projectHubHealthProbe() {
+		code := 0
+		res.ExitCode = &code
+		res.Status = "ok"
+		res.Meta["applicationRunning"] = true
+		res.Meta["startState"] = "already_running"
+		res.Output = fmt.Sprintf("applicationRunning=true state=already_running url=%s", projectHubDefaultURL)
+		finish(&res, start)
+		return res
+	}
+
+	spec := runSpec{
+		logical: res.LogicalCommand,
+		exe:     "dotnet.exe",
+		args: []string{
+			"run",
+			"--project", "src/ProjectHub.Server",
+			"--configuration", "Release",
+			"--no-build",
+			"--no-launch-profile",
+			"--urls", projectHubDefaultURL,
+		},
+		dir: workDir,
+	}
+	pid, err := projectHubStartProcess(bridgeRoot, spec)
+	if err != nil {
+		res.Meta["startState"] = "start_failed"
+		res.Error = "failed to start ProjectHub: " + err.Error()
+		finish(&res, start)
+		return res
+	}
+	res.Meta["pid"] = pid
+	res.Meta["startState"] = "started"
+
+	deadline := time.Now().Add(projectHubStartupTimeout)
+	for {
+		if projectHubHealthProbe() {
+			code := 0
+			res.ExitCode = &code
+			res.Status = "ok"
+			res.Meta["applicationRunning"] = true
+			res.Output = fmt.Sprintf("applicationRunning=true state=started pid=%d url=%s", pid, projectHubDefaultURL)
+			finish(&res, start)
+			return res
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		projectHubSleep(250 * time.Millisecond)
+	}
+
+	res.Meta["startState"] = "health_failed"
+	if err := projectHubKillProcess(pid); err == nil {
+		res.Meta["processKilled"] = true
+	}
+	res.Error = fmt.Sprintf("ProjectHub did not become healthy at %s within %s", projectHubDefaultURL, projectHubStartupTimeout)
 	finish(&res, start)
 	return res
 }
