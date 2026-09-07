@@ -12,11 +12,11 @@ globalThis.PFComposer = Object.freeze({
     if (!editable) throw new Error("CHATGPT_SELECTOR_UNAVAILABLE");
     const inner = this.normalize(element.innerText);
     const text = this.normalize(element.textContent);
-    // ChatGPT/ProseMirror represents an empty composer as a placeholder paragraph
-    // such as <p data-empty-paragraph="true"><br></p>. Treat that structure as
-    // logically empty even when innerText exposes structural line breaks.
-    if (text === "" && (inner.replace(/\n/g, "") === "" ||
-        element.querySelector('p[data-empty-paragraph="true"]'))) return [""];
+    // ChatGPT/ProseMirror represents an empty composer as a structural paragraph:
+    // <p data-empty-paragraph="true" ...><br ...></p>. It is logically empty.
+    const hasEmptyParagraph = typeof element.querySelector === "function" &&
+      Boolean(element.querySelector('p[data-empty-paragraph="true"]'));
+    if (text === "" && (inner.replace(/\n/g, "") === "" || hasEmptyParagraph)) return [""];
     return [...new Set([inner, text])];
   },
   read(element) {
@@ -28,35 +28,12 @@ globalThis.PFComposer = Object.freeze({
       observed === target || (!target.endsWith("\n") && observed === `${target}\n`)
     );
   },
-  activate(element) {
-    if (typeof element.click === "function") element.click();
-    element.focus();
-  },
-  clear(element) {
-    this.activate(element);
-    if (element.tagName === "TEXTAREA") {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
-      setter.call(element, "");
-    } else {
-      const selection = element.ownerDocument.getSelection();
-      const range = element.ownerDocument.createRange();
-      range.selectNodeContents(element);
-      selection.removeAllRanges();
-      selection.addRange(range);
-      if (!element.ownerDocument.execCommand("delete", false, null)) {
-        throw new Error("CHATGPT_BOOTSTRAP_MISMATCH");
-      }
-    }
-    element.dispatchEvent(new InputEvent("input", {bubbles: true, inputType: "deleteContentBackward", data: null}));
-    element.dispatchEvent(new Event("change", {bubbles: true}));
-    if (this.read(element) !== "") throw new Error("CHATGPT_BOOTSTRAP_MISMATCH");
-  },
   insert(element, bootstrap) {
     if (typeof bootstrap !== "string" || !bootstrap.length ||
         new TextEncoder().encode(bootstrap).length > 65536 || this.read(element) !== "") {
       throw new Error("CHATGPT_BOOTSTRAP_MISMATCH");
     }
-    this.activate(element);
+    element.focus();
     if (element.tagName === "TEXTAREA") {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
       setter.call(element, bootstrap);
