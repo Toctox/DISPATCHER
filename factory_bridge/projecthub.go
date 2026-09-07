@@ -171,3 +171,64 @@ func executeProjectHubBuild(cfg Config, cmd Command, start time.Time, r runner) 
 	finish(&res, start)
 	return res
 }
+
+func executeProjectHubTest(cfg Config, cmd Command, start time.Time, r runner) Result {
+	res := baseResult(cmd, start)
+	res.LogicalCommand = "dotnet test ProjectHub.slnx --configuration Release --no-build --no-restore"
+	res.Meta["project"] = "ProjectHub"
+	res.Meta["solution"] = "ProjectHub.slnx"
+	res.Meta["configuration"] = "Release"
+	res.Meta["test"] = "not_run"
+
+	workDir := strings.TrimSpace(cfg.ProjectHubWorkDir)
+	if workDir == "" {
+		res.Error = "projectHubWorkDir is not configured"
+		finish(&res, start)
+		return res
+	}
+	stat, err := os.Stat(workDir)
+	if err != nil || !stat.IsDir() {
+		res.Error = "projectHubWorkDir is unavailable"
+		finish(&res, start)
+		return res
+	}
+	solution := filepath.Join(workDir, "ProjectHub.slnx")
+	if stat, err := os.Stat(solution); err != nil || stat.IsDir() {
+		res.Error = "ProjectHub.slnx is unavailable"
+		finish(&res, start)
+		return res
+	}
+
+	timeout := cfg.CommandTimeoutSec
+	if timeout <= 0 {
+		timeout = 120
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	stdout, stderr, code, runErr := r.Run(ctx, runSpec{
+		logical: "dotnet test ProjectHub.slnx --configuration Release --no-build --no-restore",
+		exe:     "dotnet.exe",
+		args:    []string{"test", "ProjectHub.slnx", "--configuration", "Release", "--no-build", "--no-restore"},
+		dir:     workDir,
+	})
+	res.Stdout, res.Stderr, res.ExitCode = stdout, stderr, &code
+	if runErr != nil || code != 0 {
+		res.Meta["test"] = "failed"
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			res.Error = fmt.Sprintf("command timed out after %ds", timeout)
+		} else if runErr != nil {
+			res.Error = runErr.Error()
+		} else {
+			res.Error = "dotnet test failed"
+		}
+		finish(&res, start)
+		return res
+	}
+
+	res.Meta["test"] = "ok"
+	res.Status = "ok"
+	res.Output = "test=ok configuration=Release"
+	finish(&res, start)
+	return res
+}
