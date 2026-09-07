@@ -5,8 +5,10 @@
   let expectedBootstrap = null;
   let busy = false;
   let allowedNewChatNavigation = false;
+  let sendNavigationObserved = false;
   const fail = code => { throw new Error(code); };
   const isNewChatPath = pathname => pathname === "/" || /^\/[A-Za-z]{2}(?:-[A-Za-z]{2})?\/$/.test(pathname);
+  const isConversationPath = pathname => /^\/(?:[A-Za-z]{2}(?:-[A-Za-z]{2})?\/)?c\//.test(pathname);
   const composerMatches = (element, expected) => typeof PFComposer.matches === "function"
     ? PFComposer.matches(element, expected)
     : PFComposer.read(element) === expected;
@@ -15,6 +17,7 @@
     phase = "BINDING_CHANGED";
     expectedBootstrap = null;
     allowedNewChatNavigation = false;
+    sendNavigationObserved = false;
   }
   const navigationSupported = typeof globalThis.navigation?.addEventListener === "function";
   if (navigationSupported) {
@@ -29,6 +32,11 @@
           isNewChatPath(destination.pathname) && !destination.search && !destination.hash &&
           ["push", "replace"].includes(event.navigationType)) {
         allowedNewChatNavigation = false;
+        return;
+      }
+      if (phase === "SEND_ATTEMPTED" && event.destination.sameDocument &&
+          destination.origin === "https://chatgpt.com" && isConversationPath(destination.pathname)) {
+        sendNavigationObserved = true;
         return;
       }
       invalidateBinding();
@@ -97,6 +105,35 @@
     };
   }
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  async function sendByEnter(editor, bootstrap, value) {
+    // Real Chrome has KeyboardEvent. The button fallback exists only for old/test runtimes
+    // that lack KeyboardEvent; never fall back after an Enter has been attempted.
+    if (typeof KeyboardEvent !== "function") {
+      control("send").click();
+      return;
+    }
+    editor.focus();
+    sendNavigationObserved = false;
+    const options = {
+      key: "Enter", code: "Enter", location: 0,
+      ctrlKey: false, shiftKey: false, altKey: false, metaKey: false,
+      repeat: false, bubbles: true, cancelable: true, composed: true
+    };
+    editor.dispatchEvent(new KeyboardEvent("keydown", options));
+    editor.dispatchEvent(new KeyboardEvent("keyup", options));
+    const deadline = Math.min(value.expiresAt, Date.now() + 2000);
+    while (Date.now() < deadline) {
+      if (sendNavigationObserved || !editor.isConnected) return;
+      try {
+        if (!composerMatches(editor, bootstrap)) return;
+      } catch (error) {
+        if (error.message === "CHATGPT_SELECTOR_UNAVAILABLE") return;
+        throw error;
+      }
+      await delay(50);
+    }
+    fail("CHATGPT_SEND_UNCERTAIN");
+  }
   async function execute(value) {
     if (busy) fail("CHATGPT_TAB_BUSY");
     busy = true;
@@ -154,12 +191,13 @@
       }
       if (phase !== "INSERT_BOOTSTRAP") fail("CHATGPT_RESERVATION_INVALID");
       phase = "SEND_ATTEMPTED";
-      if (!composerMatches(control("composer"), expectedBootstrap)) fail("CHATGPT_BOOTSTRAP_MISMATCH");
-      const button = control("send");
+      const editor = control("composer");
+      const sendingBootstrap = expectedBootstrap;
+      if (!composerMatches(editor, sendingBootstrap)) fail("CHATGPT_BOOTSTRAP_MISMATCH");
       requireBinding(value);
       if (!Number.isSafeInteger(value.expiresAt) || Date.now() >= value.expiresAt) fail("CHATGPT_SEND_UNCERTAIN");
       expectedBootstrap = null;
-      button.click();
+      await sendByEnter(editor, sendingBootstrap, value);
       return {status: "OK"};
     } finally { busy = false; }
   }
