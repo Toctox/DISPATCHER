@@ -80,7 +80,7 @@ function Ensure-ChatGptExtensionBridge {
     $configArgument = '"' + $ConfigPath + '"'
     Start-Process -FilePath $PythonPath `
         -ArgumentList @('-m','factory_dispatcher.chatgpt_extension_bridge_runtime','--config',$configArgument) `
-        -WorkingDirectory $ProjectPath `
+        -WorkingDirectory $projectPath `
         -WindowStyle Hidden | Out-Null
 
     for ($attempt = 0; $attempt -lt 24; $attempt++) {
@@ -174,7 +174,7 @@ function Invoke-SafeLatestPreSendRecovery {
     $phase = [string]$reservation.phase
     $errorCode = [string]$status.errorCode
     $recoverable = ($phase -eq 'NEW_CHAT_ATTEMPTED' -and
-        $errorCode -in @('CHATGPT_NEW_CHAT_FAILED','CHATGPT_BINDING_CHANGED')) -or
+        $errorCode -in @('CHATGPT_NEW_CHAT_FAILED','CHATGPT_BINDING_CHANGED','CHATGPT_BRIDGE_UNAVAILABLE')) -or
         ($phase -eq 'INSERT_BOOTSTRAP_ATTEMPTED' -and
         $errorCode -eq 'CHATGPT_BOOTSTRAP_MISMATCH')
     if (-not $recoverable) { return }
