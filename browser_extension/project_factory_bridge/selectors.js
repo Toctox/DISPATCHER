@@ -2,10 +2,13 @@
 globalThis.PFSelectors = Object.freeze({
   account: ['[data-testid="accounts-profile-button"]', 'button[aria-label="Open profile menu"]'],
   login: ['[data-testid="login-button"]', 'button[aria-label="Log in"]'],
-  newChat: ['[data-testid="create-new-chat-button"]', 'a[aria-label="New chat"]', 'button[aria-label="New chat"]'],
+  newChat: ['[data-testid="create-new-chat-button"]', '[data-testid="new-chat-button"]',
+    'a[aria-label="New chat"]', 'button[aria-label="New chat"]',
+    'a[aria-label="Novo chat"]', 'button[aria-label="Novo chat"]'],
   composer: ['textarea[data-testid="prompt-textarea"]', 'textarea#prompt-textarea',
-    '[contenteditable="true"][data-testid="prompt-textarea"]', '#prompt-textarea[contenteditable="true"]'],
-  send: ['button[data-testid="send-button"]', 'button[aria-label="Send prompt"]']
+    '[data-testid="prompt-textarea"][contenteditable]', '#prompt-textarea[contenteditable]'],
+  send: ['button[data-testid="send-button"]', 'button[aria-label="Send prompt"]',
+    'button[aria-label="Enviar prompt"]']
 });
 
 // Keep raw DOM matches distinct from usable controls. Responsive clones may have dimensions
@@ -24,6 +27,15 @@ globalThis.PFSelection = (() => {
   function rawMatches(kind) {
     return [...new Set(PFSelectors[kind].flatMap(selector => [...document.querySelectorAll(selector)]))];
   }
-  function candidates(kind) { return rawMatches(kind).filter(isUsable); }
+  function candidates(kind) {
+    // Selectors are ordered from strongest/stablest to broad fallbacks. Do not union
+    // different selector tiers: ChatGPT can legitimately expose two distinct visible
+    // controls (for example sidebar + header) that both mean "new chat".
+    for (const selector of PFSelectors[kind]) {
+      const found = [...new Set([...document.querySelectorAll(selector)].filter(isUsable))];
+      if (found.length) return found;
+    }
+    return [];
+  }
   return Object.freeze({isUsable, rawMatches, candidates});
 })();
