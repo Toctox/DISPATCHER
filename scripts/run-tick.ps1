@@ -164,56 +164,37 @@ function Write-LatestChatGptWorkerDiagnostic {
     }
 }
 
-function Invoke-SafeSmoke0011Recovery {
+function Invoke-SafeLatestPreSendRecovery {
     param([string]$ProjectPath,[string]$PythonPath,[string]$ConfigPath)
-    $marker = Join-Path $ProjectPath 'state\chatgpt-bridge\recovered-smoke-0011.marker'
-    if (Test-Path -LiteralPath $marker -PathType Leaf) { return }
     $reservation = Get-ChatGptBridgeReservation -ProjectPath $ProjectPath
     $status = Get-LatestChatGptWorkerStatus -ProjectPath $ProjectPath
     if ($null -eq $reservation -or $null -eq $status) { return }
-    if ([string]$reservation.phase -ne 'INSERT_BOOTSTRAP_ATTEMPTED' -or
-        [string]$status.dispatchId -ne 'D-SMOKE-CHATGPT-0011' -or
-        [string]$status.attemptId -ne 'D-SMOKE-CHATGPT-0011-A001' -or
-        [string]$status.state -ne 'STOPPED' -or
-        [string]$status.errorCode -ne 'CHATGPT_BOOTSTRAP_MISMATCH' -or
-        [bool]$status.sendAttempted) { return }
+    if ([string]$status.state -ne 'STOPPED' -or [bool]$status.sendAttempted) { return }
 
+    $phase = [string]$reservation.phase
+    $errorCode = [string]$status.errorCode
+    $recoverable = ($phase -eq 'NEW_CHAT_ATTEMPTED' -and
+        $errorCode -in @('CHATGPT_NEW_CHAT_FAILED','CHATGPT_BINDING_CHANGED')) -or
+        ($phase -eq 'INSERT_BOOTSTRAP_ATTEMPTED' -and
+        $errorCode -eq 'CHATGPT_BOOTSTRAP_MISMATCH')
+    if (-not $recoverable) { return }
+
+    $dispatchId = [string]$status.dispatchId
+    $attemptId = [string]$status.attemptId
     & $PythonPath -m factory_dispatcher.chatgpt_extension_recover `
         --config $ConfigPath `
-        --dispatch-id 'D-SMOKE-CHATGPT-0011' `
-        --attempt-id 'D-SMOKE-CHATGPT-0011-A001'
+        --dispatch-id $dispatchId `
+        --attempt-id $attemptId
     if ($LASTEXITCODE -ne 0) {
-        throw 'Evidence-gated recovery for D-SMOKE-CHATGPT-0011 was refused or uncertain.'
+        throw "Evidence-gated recovery for $attemptId was refused or uncertain."
     }
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [IO.File]::WriteAllText($marker, 'RELEASED_PRE_SEND', $utf8NoBom)
-    [Console]::Error.WriteLine('{"kind":"CHATGPT_RECOVERY_0011","outcome":"RELEASED_PRE_SEND"}')
-}
-
-function Invoke-SafeSmoke0012Recovery {
-    param([string]$ProjectPath,[string]$PythonPath,[string]$ConfigPath)
-    $marker = Join-Path $ProjectPath 'state\chatgpt-bridge\recovered-smoke-0012.marker'
-    if (Test-Path -LiteralPath $marker -PathType Leaf) { return }
-    $reservation = Get-ChatGptBridgeReservation -ProjectPath $ProjectPath
-    $status = Get-LatestChatGptWorkerStatus -ProjectPath $ProjectPath
-    if ($null -eq $reservation -or $null -eq $status) { return }
-    if ([string]$reservation.phase -ne 'NEW_CHAT_ATTEMPTED' -or
-        [string]$status.dispatchId -ne 'D-SMOKE-CHATGPT-0012' -or
-        [string]$status.attemptId -ne 'D-SMOKE-CHATGPT-0012-A001' -or
-        [string]$status.state -ne 'STOPPED' -or
-        [string]$status.errorCode -ne 'CHATGPT_NEW_CHAT_FAILED' -or
-        [bool]$status.sendAttempted) { return }
-
-    & $PythonPath -m factory_dispatcher.chatgpt_extension_recover `
-        --config $ConfigPath `
-        --dispatch-id 'D-SMOKE-CHATGPT-0012' `
-        --attempt-id 'D-SMOKE-CHATGPT-0012-A001'
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Evidence-gated recovery for D-SMOKE-CHATGPT-0012 was refused or uncertain.'
+    $payload = [ordered]@{
+        kind = 'CHATGPT_PRE_SEND_RECOVERY'
+        dispatchId = $dispatchId
+        attemptId = $attemptId
+        outcome = 'RELEASED_PRE_SEND'
     }
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [IO.File]::WriteAllText($marker, 'RELEASED_PRE_SEND', $utf8NoBom)
-    [Console]::Error.WriteLine('{"kind":"CHATGPT_RECOVERY_0012","outcome":"RELEASED_PRE_SEND"}')
+    [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
 }
 
 $dispatcherArguments = @($dispatcherPath, '--tick', '--config', $configPath)
@@ -225,8 +206,7 @@ Push-Location -LiteralPath $projectPath
 try {
     Ensure-ChatGptExtensionBridge -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath -Revision $bridgeRuntimeRevision
     if ($DryRun) {
-        Invoke-SafeSmoke0011Recovery -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath
-        Invoke-SafeSmoke0012Recovery -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath
+        Invoke-SafeLatestPreSendRecovery -ProjectPath $projectPath -PythonPath $pythonPath -ConfigPath $configPath
     }
     Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath
     if ($DryRun) {
