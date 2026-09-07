@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const bridgeVersion = "0.9.0"
+const bridgeVersion = "0.10.0"
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
@@ -149,16 +149,22 @@ func executeAction(cfg Config, cmd Command, r runner) Result {
 		return res
 
 	case "projecthub.status":
-		return executeProjectHubStatus(cfg, cmd, start, r)
+		return executeProjectHubStatusCanonical(cfg, cmd, start, r)
+
+	case "projecthub.sync":
+		return executeProjectHubSync(cfg, cmd, start, r)
 
 	case "projecthub.build":
-		return executeProjectHubBuild(cfg, cmd, start, r)
+		return executeProjectHubBuildCanonical(cfg, cmd, start, r)
 
 	case "projecthub.test":
-		return executeProjectHubTest(cfg, cmd, start, r)
+		return executeProjectHubTestCanonical(cfg, cmd, start, r)
 
 	case "projecthub.start":
-		return executeProjectHubStart(cfg, cmd, start)
+		return executeProjectHubStartCanonical(cfg, cmd, start, r)
+
+	case "projecthub.stop":
+		return executeProjectHubStop(cfg, cmd, start)
 
 	case "git.status":
 		if strings.TrimSpace(cfg.DispatcherWorkDir) == "" {
