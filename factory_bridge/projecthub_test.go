@@ -138,6 +138,65 @@ func TestProjectHubBuildFailsClosedWithoutSolution(t *testing.T) {
 	}
 }
 
+func TestProjectHubTestUsesOnlyFixedDotnetCommand(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "ProjectHub.slnx"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRunner{stdout: "Passed!\n", code: 0}
+	res := executeAction(Config{
+		ProjectHubWorkDir: workDir,
+		CommandTimeoutSec: 10,
+	}, Command{ID: "PH-TEST-1", Action: "projecthub.test"}, f)
+
+	if res.Status != "ok" || res.ExitCode == nil || *res.ExitCode != 0 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if res.Meta["test"] != "ok" {
+		t.Fatalf("test=%v", res.Meta["test"])
+	}
+	if len(f.specs) != 1 {
+		t.Fatalf("runs=%d", len(f.specs))
+	}
+	spec := f.specs[0]
+	if spec.exe != "dotnet.exe" {
+		t.Fatalf("exe=%q", spec.exe)
+	}
+	if spec.dir != workDir {
+		t.Fatalf("dir=%q", spec.dir)
+	}
+	args := strings.Join(spec.args, " ")
+	if args != "test ProjectHub.slnx --configuration Release --no-build --no-restore" {
+		t.Fatalf("args=%q", args)
+	}
+}
+
+func TestProjectHubTestReportsFailure(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "ProjectHub.slnx"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRunner{stderr: "test failed", code: 1, err: errors.New("exit status 1")}
+	res := executeAction(Config{ProjectHubWorkDir: workDir}, Command{ID: "PH-TEST-2", Action: "projecthub.test"}, f)
+	if res.Status != "failed" || res.Meta["test"] != "failed" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if len(f.specs) != 1 {
+		t.Fatalf("runner invoked %d times", len(f.specs))
+	}
+}
+
+func TestProjectHubTestFailsClosedWithoutSolution(t *testing.T) {
+	f := &fakeRunner{code: 0}
+	res := executeAction(Config{ProjectHubWorkDir: t.TempDir()}, Command{ID: "PH-TEST-3", Action: "projecthub.test"}, f)
+	if res.Status != "failed" || res.Error != "ProjectHub.slnx is unavailable" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if len(f.specs) != 0 {
+		t.Fatalf("runner invoked %d times", len(f.specs))
+	}
+}
+
 func TestProjectHubWorkDirIsAcceptedInLocalConfig(t *testing.T) {
 	cfg, err := loadConfig(writeConfigForTest(t, `{"bridgeRoot":"C:\\bridge","projectHubWorkDir":"C:\\src\\ProjectHub"}`))
 	if err != nil {
