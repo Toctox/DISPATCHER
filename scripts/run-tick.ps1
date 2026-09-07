@@ -186,6 +186,76 @@ function Write-LatestChatGptWorkerDiagnostic {
     }
 }
 
+function Write-ChatGptDesktopUiaDiagnostic {
+    try {
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        $process = Get-Process -Name 'ChatGPT' -ErrorAction SilentlyContinue |
+            Where-Object { $_.MainWindowHandle -ne 0 } |
+            Select-Object -First 1
+        if ($null -eq $process) {
+            [Console]::Error.WriteLine('{"kind":"CHATGPT_DESKTOP_UIA","status":"WINDOW_NOT_FOUND"}')
+            return
+        }
+        $root = [System.Windows.Automation.AutomationElement]::FromHandle($process.MainWindowHandle)
+        if ($null -eq $root) {
+            [Console]::Error.WriteLine('{"kind":"CHATGPT_DESKTOP_UIA","status":"ROOT_NOT_FOUND"}')
+            return
+        }
+        $elements = $root.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition
+        )
+        $count = 0
+        foreach ($element in $elements) {
+            if ($count -ge 120) { break }
+            try {
+                $name = [string]$element.Current.Name
+                $automationId = [string]$element.Current.AutomationId
+                $controlType = [string]$element.Current.ControlType.ProgrammaticName
+                $className = [string]$element.Current.ClassName
+                $interesting = $name -match '(?i)^(chat|work|conversa|trabalho|new chat|novo chat)$' -or
+                    $automationId -match '(?i)(chat|work|new)' -or
+                    $controlType -match '(?i)(Button|Tab|RadioButton|Edit)'
+                if (-not $interesting) { continue }
+                $rect = $element.Current.BoundingRectangle
+                $payload = [ordered]@{
+                    kind = 'CHATGPT_DESKTOP_UIA_CONTROL'
+                    name = $name
+                    automationId = $automationId
+                    controlType = $controlType
+                    className = $className
+                    enabled = [bool]$element.Current.IsEnabled
+                    offscreen = [bool]$element.Current.IsOffscreen
+                    x = [math]::Round($rect.X, 1)
+                    y = [math]::Round($rect.Y, 1)
+                    width = [math]::Round($rect.Width, 1)
+                    height = [math]::Round($rect.Height, 1)
+                }
+                [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
+                $count++
+            }
+            catch { continue }
+        }
+        $summary = [ordered]@{
+            kind = 'CHATGPT_DESKTOP_UIA'
+            status = 'OK'
+            pid = [int]$process.Id
+            hwnd = [int64]$process.MainWindowHandle
+            emitted = $count
+        }
+        [Console]::Error.WriteLine(($summary | ConvertTo-Json -Compress))
+    }
+    catch {
+        $payload = [ordered]@{
+            kind = 'CHATGPT_DESKTOP_UIA'
+            status = 'FAILED'
+            error = $_.Exception.Message
+        }
+        [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress))
+    }
+}
+
 function Invoke-SafeLatestPreSendRecovery {
     param([string]$ProjectPath,[string]$PythonPath,[string]$ConfigPath)
     $reservation = Get-ChatGptBridgeReservation -ProjectPath $ProjectPath
@@ -236,6 +306,7 @@ try {
     Write-ChatGptBridgeDiagnostic -ProjectPath $projectPath
     if ($DryRun) {
         Write-LatestChatGptWorkerDiagnostic -ProjectPath $projectPath
+        Write-ChatGptDesktopUiaDiagnostic
     }
     & $pythonPath @dispatcherArguments
     exit $LASTEXITCODE
