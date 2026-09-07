@@ -1,7 +1,7 @@
 globalThis.PFComposer = Object.freeze({
   read(element) {
     if (element.tagName === "TEXTAREA") return element.value;
-    if (element.getAttribute("contenteditable") === "true") {
+    if (element.isContentEditable) {
       const text = element.innerText;
       // A solitary editor placeholder BR isn't user text. Read only this composer.
       if (text === "\n" && element.textContent === "") return "";
