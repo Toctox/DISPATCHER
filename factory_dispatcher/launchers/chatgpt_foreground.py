@@ -22,9 +22,9 @@ class ForegroundChatGPTLauncher:
     """Closed Windows foreground launcher for the official ChatGPT desktop app.
 
     This launcher intentionally exposes no generic keyboard/mouse/shell surface. Its
-    only operation is: activate the ChatGPT desktop window, focus the composer at a
-    fixed window-relative point, paste the canonical Factory bootstrap, and press
-    Enter exactly once.
+    only operation is: activate the ChatGPT desktop window, open a fresh chat with
+    Ctrl+N, focus the composer at a fixed window-relative point, paste the canonical
+    Factory bootstrap, and press Enter exactly once.
     """
 
     requires_reconciliation = True
@@ -36,6 +36,7 @@ class ForegroundChatGPTLauncher:
     _CF_UNICODETEXT = 13
     _GMEM_MOVEABLE = 0x0002
     _VK_CONTROL = 0x11
+    _VK_N = 0x4E
     _VK_V = 0x56
     _VK_RETURN = 0x0D
     _VK_MENU = 0x12
@@ -78,6 +79,8 @@ class ForegroundChatGPTLauncher:
 
         self._activate_and_maximize(hwnd)
         time.sleep(0.8)
+        self._send_ctrl_n()
+        time.sleep(1.2)
         self._click_composer(hwnd)
         time.sleep(0.25)
         self._set_clipboard_text(prompt)
@@ -90,7 +93,7 @@ class ForegroundChatGPTLauncher:
         return LaunchResult(
             launcher=self.launcher_name,
             pid=self._window_pid(hwnd),
-            detail="foreground paste and single Enter attempted",
+            detail="fresh-chat Ctrl+N, foreground paste and single Enter attempted",
         )
 
     @classmethod
@@ -236,6 +239,14 @@ class ForegroundChatGPTLauncher:
             user32.CloseClipboard()
             if handle:
                 global_free(handle)
+
+    @classmethod
+    def _send_ctrl_n(cls) -> None:
+        user32 = cls._user32()
+        user32.keybd_event(cls._VK_CONTROL, 0, 0, 0)
+        user32.keybd_event(cls._VK_N, 0, 0, 0)
+        user32.keybd_event(cls._VK_N, 0, cls._KEYEVENTF_KEYUP, 0)
+        user32.keybd_event(cls._VK_CONTROL, 0, cls._KEYEVENTF_KEYUP, 0)
 
     @classmethod
     def _send_ctrl_v(cls) -> None:
