@@ -108,7 +108,6 @@ func runSupervisor(cfg Config) error {
 
 		lastStart = time.Now()
 		executorPID := cmd.Process.Pid
-		lastErr = ""
 		_ = writeSupervisorStatus(cfg, started, executorPID, restartCount, lastStart, lastExit, lastErr)
 		fmt.Printf("Executor started pid=%d\n", executorPID)
 
@@ -116,16 +115,19 @@ func runSupervisor(cfg Config) error {
 		go func() { done <- cmd.Wait() }()
 		ticker := time.NewTicker(supervisorHeartbeatInterval)
 		monitoring := true
+		forcedExitReason := ""
 		for monitoring {
 			select {
 			case err := <-done:
 				ticker.Stop()
 				lastExit = time.Now()
 				restartCount++
-				if err != nil {
-					lastErr = fmt.Sprintf("executor exited: %v", err)
+				if forcedExitReason != "" {
+					lastErr = forcedExitReason
+				} else if err != nil {
+					lastErr = fmt.Sprintf("last executor exit: %v", err)
 				} else {
-					lastErr = "executor exited"
+					lastErr = "last executor exit: process exited normally"
 				}
 				_ = writeSupervisorStatus(cfg, started, 0, restartCount, lastStart, lastExit, lastErr)
 				fmt.Fprintln(os.Stderr, lastErr)
@@ -135,8 +137,9 @@ func runSupervisor(cfg Config) error {
 				now := time.Now()
 				_ = writeSupervisorStatus(cfg, started, executorPID, restartCount, lastStart, lastExit, lastErr)
 				if !executorHeartbeatHealthy(cfg, executorPID, now, lastStart) {
-					lastErr = fmt.Sprintf("executor heartbeat stale for more than %s; restarting", executorHangThreshold)
-					fmt.Fprintln(os.Stderr, lastErr)
+					forcedExitReason = fmt.Sprintf("last executor exit: heartbeat stale for more than %s; supervisor killed executor", executorHangThreshold)
+					lastErr = forcedExitReason
+					fmt.Fprintln(os.Stderr, forcedExitReason)
 					_ = cmd.Process.Kill()
 				}
 			}
