@@ -16,10 +16,10 @@ func TestProjectHubStatusUsesOnlyLocalAllowlistedInputs(t *testing.T) {
 	projectHubHealthProbe = func() bool { return true }
 	defer func() { projectHubHealthProbe = oldProbe }()
 
-	res := executeAction(Config{
+	res := executeProjectHubStatus(Config{
 		ProjectHubWorkDir: workDir,
 		CommandTimeoutSec: 10,
-	}, Command{ID: "PH-STATUS-1", Action: "projecthub.status"}, f)
+	}, Command{ID: "PH-STATUS-1", Action: "projecthub.status"}, time.Now(), f)
 
 	if res.Status != "ok" {
 		t.Fatalf("unexpected status: %+v", res)
@@ -60,7 +60,7 @@ func TestProjectHubStatusUsesOnlyLocalAllowlistedInputs(t *testing.T) {
 
 func TestProjectHubStatusFailsClosedWithoutLocalWorkDir(t *testing.T) {
 	f := &fakeRunner{code: 0}
-	res := executeAction(Config{}, Command{ID: "PH-STATUS-2", Action: "projecthub.status"}, f)
+	res := executeProjectHubStatus(Config{}, Command{ID: "PH-STATUS-2", Action: "projecthub.status"}, time.Now(), f)
 	if res.Status != "failed" {
 		t.Fatalf("unexpected status: %+v", res)
 	}
@@ -78,10 +78,10 @@ func TestProjectHubBuildUsesOnlyFixedDotnetCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeRunner{stdout: "ok\n", code: 0}
-	res := executeAction(Config{
+	res := executeProjectHubBuild(Config{
 		ProjectHubWorkDir: workDir,
 		CommandTimeoutSec: 10,
-	}, Command{ID: "PH-BUILD-1", Action: "projecthub.build"}, f)
+	}, Command{ID: "PH-BUILD-1", Action: "projecthub.build"}, time.Now(), f)
 
 	if res.Status != "ok" || res.ExitCode == nil || *res.ExitCode != 0 {
 		t.Fatalf("unexpected result: %+v", res)
@@ -116,7 +116,7 @@ func TestProjectHubBuildStopsWhenRestoreFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeRunner{stderr: "restore failed", code: 1, err: errors.New("exit status 1")}
-	res := executeAction(Config{ProjectHubWorkDir: workDir}, Command{ID: "PH-BUILD-2", Action: "projecthub.build"}, f)
+	res := executeProjectHubBuild(Config{ProjectHubWorkDir: workDir}, Command{ID: "PH-BUILD-2", Action: "projecthub.build"}, time.Now(), f)
 	if res.Status != "failed" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -130,7 +130,7 @@ func TestProjectHubBuildStopsWhenRestoreFails(t *testing.T) {
 
 func TestProjectHubBuildFailsClosedWithoutSolution(t *testing.T) {
 	f := &fakeRunner{code: 0}
-	res := executeAction(Config{ProjectHubWorkDir: t.TempDir()}, Command{ID: "PH-BUILD-3", Action: "projecthub.build"}, f)
+	res := executeProjectHubBuild(Config{ProjectHubWorkDir: t.TempDir()}, Command{ID: "PH-BUILD-3", Action: "projecthub.build"}, time.Now(), f)
 	if res.Status != "failed" || res.Error != "ProjectHub.slnx is unavailable" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -145,10 +145,10 @@ func TestProjectHubTestUsesOnlyFixedDotnetCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeRunner{stdout: "Passed!\n", code: 0}
-	res := executeAction(Config{
+	res := executeProjectHubTest(Config{
 		ProjectHubWorkDir: workDir,
 		CommandTimeoutSec: 10,
-	}, Command{ID: "PH-TEST-1", Action: "projecthub.test"}, f)
+	}, Command{ID: "PH-TEST-1", Action: "projecthub.test"}, time.Now(), f)
 
 	if res.Status != "ok" || res.ExitCode == nil || *res.ExitCode != 0 {
 		t.Fatalf("unexpected result: %+v", res)
@@ -178,7 +178,7 @@ func TestProjectHubTestReportsFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeRunner{stderr: "test failed", code: 1, err: errors.New("exit status 1")}
-	res := executeAction(Config{ProjectHubWorkDir: workDir}, Command{ID: "PH-TEST-2", Action: "projecthub.test"}, f)
+	res := executeProjectHubTest(Config{ProjectHubWorkDir: workDir}, Command{ID: "PH-TEST-2", Action: "projecthub.test"}, time.Now(), f)
 	if res.Status != "failed" || res.Meta["test"] != "failed" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -189,7 +189,7 @@ func TestProjectHubTestReportsFailure(t *testing.T) {
 
 func TestProjectHubTestFailsClosedWithoutSolution(t *testing.T) {
 	f := &fakeRunner{code: 0}
-	res := executeAction(Config{ProjectHubWorkDir: t.TempDir()}, Command{ID: "PH-TEST-3", Action: "projecthub.test"}, f)
+	res := executeProjectHubTest(Config{ProjectHubWorkDir: t.TempDir()}, Command{ID: "PH-TEST-3", Action: "projecthub.test"}, time.Now(), f)
 	if res.Status != "failed" || res.Error != "ProjectHub.slnx is unavailable" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -235,7 +235,7 @@ func TestProjectHubStartUsesOnlyFixedDotnetCommandAndHealth(t *testing.T) {
 		return 4321, nil
 	}
 
-	res := executeAction(Config{BridgeRoot: bridgeRoot, ProjectHubWorkDir: workDir}, Command{ID: "PH-START-1", Action: "projecthub.start"}, &fakeRunner{})
+	res := executeProjectHubStart(Config{BridgeRoot: bridgeRoot, ProjectHubWorkDir: workDir}, Command{ID: "PH-START-1", Action: "projecthub.start"}, time.Now())
 	if res.Status != "ok" || res.ExitCode == nil || *res.ExitCode != 0 {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -266,7 +266,7 @@ func TestProjectHubStartIsIdempotentWhenAlreadyHealthy(t *testing.T) {
 		t.Fatal("start process should not be called")
 		return 0, nil
 	}
-	res := executeAction(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: workDir}, Command{ID: "PH-START-2", Action: "projecthub.start"}, &fakeRunner{})
+	res := executeProjectHubStart(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: workDir}, Command{ID: "PH-START-2", Action: "projecthub.start"}, time.Now())
 	if res.Status != "ok" || res.Meta["startState"] != "already_running" || res.Meta["applicationRunning"] != true {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -276,7 +276,7 @@ func TestProjectHubStartFailsClosedWithoutServerProject(t *testing.T) {
 	oldProbe := projectHubHealthProbe
 	projectHubHealthProbe = func() bool { return false }
 	defer func() { projectHubHealthProbe = oldProbe }()
-	res := executeAction(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: t.TempDir()}, Command{ID: "PH-START-3", Action: "projecthub.start"}, &fakeRunner{})
+	res := executeProjectHubStart(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: t.TempDir()}, Command{ID: "PH-START-3", Action: "projecthub.start"}, time.Now())
 	if res.Status != "failed" || res.Error != "ProjectHub.Server project is unavailable" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -292,7 +292,7 @@ func TestProjectHubStartReportsStartFailure(t *testing.T) {
 	}()
 	projectHubHealthProbe = func() bool { return false }
 	projectHubStartProcess = func(string, runSpec) (int, error) { return 0, errors.New("boom") }
-	res := executeAction(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: workDir}, Command{ID: "PH-START-4", Action: "projecthub.start"}, &fakeRunner{})
+	res := executeProjectHubStart(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: workDir}, Command{ID: "PH-START-4", Action: "projecthub.start"}, time.Now())
 	if res.Status != "failed" || res.Meta["startState"] != "start_failed" || !strings.Contains(res.Error, "boom") {
 		t.Fatalf("unexpected result: %+v", res)
 	}
@@ -321,7 +321,7 @@ func TestProjectHubStartKillsProcessWhenHealthNeverAppears(t *testing.T) {
 		killed = pid
 		return nil
 	}
-	res := executeAction(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: workDir}, Command{ID: "PH-START-5", Action: "projecthub.start"}, &fakeRunner{})
+	res := executeProjectHubStart(Config{BridgeRoot: t.TempDir(), ProjectHubWorkDir: workDir}, Command{ID: "PH-START-5", Action: "projecthub.start"}, time.Now())
 	if res.Status != "failed" || res.Meta["startState"] != "health_failed" || killed != 9876 || res.Meta["processKilled"] != true {
 		t.Fatalf("unexpected result: %+v killed=%d", res, killed)
 	}
