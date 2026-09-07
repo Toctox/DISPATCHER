@@ -6,8 +6,8 @@ import sys
 from pathlib import Path
 
 from .audit import JsonlAuditLogger
+from .autonomous import AutonomousDispatcher
 from .config import load_local_settings
-from .engine import Dispatcher
 from .errors import DispatcherError
 from .google_auth import build_google_services
 from .google_gateway import GoogleWorkspaceGateway
@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
             services = build_google_services(settings)
             gateway = GoogleWorkspaceGateway(services, settings)
             launchers = build_launchers(settings, arguments.config)
-            result = Dispatcher(gateway, settings, logger, launchers).tick(
+            result = AutonomousDispatcher(gateway, settings, logger, launchers).tick(
                 dry_run=arguments.dry_run
             )
             print(json.dumps(result, ensure_ascii=False, sort_keys=True))
