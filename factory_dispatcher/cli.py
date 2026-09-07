@@ -22,7 +22,7 @@ from .models import ExecutorType
 from .mutex import LocalMutex, MutexBusyError
 
 
-def build_launchers(settings, config_file: Path):
+def _legacy_chatgpt_launcher(settings, config_file: Path):
     chatgpt = (
         BrowserChatGPTLauncher(settings, config_file=config_file)
         if settings.browser_chatgpt_launch_enabled
@@ -32,15 +32,36 @@ def build_launchers(settings, config_file: Path):
     )
     if settings.chatgpt_browser_mode == "EXTENSION_BRIDGE":
         chatgpt = ExtensionChatGPTLauncher(settings, config_file=config_file)
+    return chatgpt
 
-    # Force-brute desktop mode: when the official Windows ChatGPT app is already
-    # open, prefer the closed foreground launcher. If the app is not open, retain
-    # the configured browser/extension launcher unchanged.
+
+def _chatgpt_launcher(settings, config_file: Path):
+    mode = settings.chatgpt_execution_mode
+
+    if mode == "FOREGROUND_DESKTOP":
+        # Explicit mode never falls back. If ChatGPT.exe is unavailable the closed
+        # foreground launcher fails preflight instead of silently switching surfaces.
+        return ForegroundChatGPTLauncher(settings.state_directory)
+    if mode == "EXTENSION_BRIDGE":
+        return ExtensionChatGPTLauncher(settings, config_file=config_file)
+    if mode == "BROWSER":
+        return BrowserChatGPTLauncher(settings, config_file=config_file)
+    if mode == "MANUAL":
+        return ManualChatGPTLauncher(
+            settings.chatgpt_url, enabled=settings.manual_chatgpt_launch_enabled
+        )
+
+    # AUTO exists only as a migration compatibility mode. The desktop app is
+    # preferred when it is already open; otherwise the previous configuration is
+    # retained. Production Factory Runtime V2 should use FOREGROUND_DESKTOP.
     if ForegroundChatGPTLauncher.available():
-        chatgpt = ForegroundChatGPTLauncher(settings.state_directory)
+        return ForegroundChatGPTLauncher(settings.state_directory)
+    return _legacy_chatgpt_launcher(settings, config_file)
 
+
+def build_launchers(settings, config_file: Path):
     return {
-        ExecutorType.CHATGPT: chatgpt,
+        ExecutorType.CHATGPT: _chatgpt_launcher(settings, config_file),
         ExecutorType.CODEX: CodexLauncher(
             settings.codex_executable,
             settings.state_directory,
