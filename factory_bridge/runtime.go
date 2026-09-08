@@ -163,6 +163,34 @@ func processOneObserved(cfg Config, path string, r runner) error {
 	return err
 }
 
+// orderCommandEntries provides FIFO-like queue semantics using the filesystem
+// modification timestamp observed by the local runtime. Filename ordering is
+// used only as a deterministic tie-breaker (or when metadata cannot be read).
+func orderCommandEntries(entries []os.DirEntry) []os.DirEntry {
+	ordered := append([]os.DirEntry(nil), entries...)
+	modTimes := make(map[string]time.Time, len(ordered))
+	hasTime := make(map[string]bool, len(ordered))
+	for _, entry := range ordered {
+		if info, err := entry.Info(); err == nil {
+			modTimes[entry.Name()] = info.ModTime()
+			hasTime[entry.Name()] = true
+		}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, right := ordered[i], ordered[j]
+		leftTime, leftOK := modTimes[left.Name()]
+		rightTime, rightOK := modTimes[right.Name()]
+		if leftOK && rightOK && !leftTime.Equal(rightTime) {
+			return leftTime.Before(rightTime)
+		}
+		if leftOK != rightOK {
+			return leftOK
+		}
+		return left.Name() < right.Name()
+	})
+	return ordered
+}
+
 func runExecutor(cfg Config) error {
 	if err := ensureBridgeDirs(cfg); err != nil {
 		return err
@@ -180,8 +208,7 @@ func runExecutor(cfg Config) error {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "command directory error: %v\n", err)
 		} else {
-			sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-			for _, entry := range entries {
+			for _, entry := range orderCommandEntries(entries) {
 				if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
 					continue
 				}
