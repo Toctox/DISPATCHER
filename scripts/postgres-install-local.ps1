@@ -42,13 +42,23 @@ function Find-PostgresBin {
     return $bin
 }
 
+function Find-PostgresShare {
+    param([string]$Base)
+    if (-not (Test-Path -LiteralPath $Base -PathType Container)) { return $null }
+    $bki = Get-ChildItem -LiteralPath $Base -Filter 'postgres.bki' -File -Recurse -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $bki) { return $null }
+    return $bki.Directory.FullName
+}
+
 $binDir = Find-PostgresBin -Base $installDir
+$shareDir = Find-PostgresShare -Base $installDir
 $downloaded = $false
 $extracted = $false
 $initialized = $false
 $started = $false
 
-if ($null -eq $binDir) {
+if ($null -eq $binDir -or $null -eq $shareDir) {
     if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
         Invoke-WebRequest -Uri $downloadUrl -OutFile $archive -UseBasicParsing
         $downloaded = $true
@@ -60,8 +70,12 @@ if ($null -eq $binDir) {
     Expand-Archive -LiteralPath $archive -DestinationPath $installDir -Force
     $extracted = $true
     $binDir = Find-PostgresBin -Base $installDir
+    $shareDir = Find-PostgresShare -Base $installDir
     if ($null -eq $binDir) {
         throw 'PostgreSQL archive did not contain the expected Windows binaries.'
+    }
+    if ($null -eq $shareDir) {
+        throw 'PostgreSQL archive did not contain postgres.bki; installation layout is incomplete.'
     }
 }
 
@@ -91,7 +105,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $dataDir 'PG_VERSION') -PathType Lea
     $pwFile = Join-Path $env:TEMP ("factorybridge-postgres-" + [Guid]::NewGuid().ToString('N') + '.pw')
     try {
         [IO.File]::WriteAllText($pwFile, $password, (New-Object Text.UTF8Encoding($false)))
-        & $initdb '-D' $dataDir '-U' $superuser '-A' 'scram-sha-256' '--encoding=UTF8' "--pwfile=$pwFile" | Out-Null
+        & $initdb '-D' $dataDir '-L' $shareDir '-U' $superuser '-A' 'scram-sha-256' '--encoding=UTF8' "--pwfile=$pwFile" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "initdb failed with exit code $LASTEXITCODE" }
     }
     finally {
@@ -157,6 +171,7 @@ $runtime = [ordered]@{
     version = $postgresVersion
     installDir = $installDir
     binDir = $binDir
+    shareDir = $shareDir
     dataDir = $dataDir
     host = '127.0.0.1'
     port = $port
