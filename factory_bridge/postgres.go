@@ -69,8 +69,12 @@ func executePostgresInstall(cfg Config, cmd Command, start time.Time, r runner) 
 			res.Meta["postgres"] = payload
 		}
 	}
+	version := "unknown"
+	if value, ok := payload["version"].(string); ok && strings.TrimSpace(value) != "" {
+		version = strings.TrimSpace(value)
+	}
 	res.Status = "ok"
-	res.Output = "postgres.install=ok version=18.6 host=127.0.0.1 port=5432 secret=dpapi"
+	res.Output = fmt.Sprintf("postgres.install=ok version=%s host=127.0.0.1 port=5432 secret=dpapi", version)
 	finish(&res, start)
 	return res
 }
