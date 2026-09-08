@@ -50,9 +50,8 @@ try {
         New-Item -ItemType Directory -Path $statusDir -Force | Out-Null
     }
     $logPath = Join-Path $statusDir 'factory-bridge-update.apply.log'
-    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-start-user-level')
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-start-side-by-side')
 
-    # Let dispatcher.tick finish writing its RESULT before terminating Bridge processes.
     Start-Sleep -Seconds 5
 
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' stopping-bridge-processes')
@@ -62,41 +61,30 @@ try {
         Start-Sleep -Milliseconds 500
     }
     if ($null -ne (Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue)) {
-        throw 'FactoryBridge processes did not stop before binary swap.'
+        throw 'FactoryBridge processes did not stop before local deployment.'
     }
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' bridge-processes-stopped')
 
-    $current = Join-Path $bridgeRoot 'FactoryBridge.exe'
-    $next = Join-Path $bridgeRoot 'FactoryBridge.next.exe'
-    $previous = Join-Path $bridgeRoot 'FactoryBridge.prev.exe'
-    if (-not (Test-Path -LiteralPath $next -PathType Leaf)) { throw "Staged binary missing: $next" }
+    # Google Drive may hold a sync lock on FactoryBridge.exe. Do not rename/replace it.
+    # Promote the staged binary into the user-local runtime directory instead.
+    $staged = Join-Path $bridgeRoot 'FactoryBridge.next.exe'
+    if (-not (Test-Path -LiteralPath $staged -PathType Leaf)) { throw "Staged binary missing: $staged" }
 
-    if (Test-Path -LiteralPath $previous) { Remove-Item -LiteralPath $previous -Force -ErrorAction SilentlyContinue }
-    if (Test-Path -LiteralPath $current) { Move-Item -LiteralPath $current -Destination $previous -Force }
-    try {
-        Move-Item -LiteralPath $next -Destination $current -Force
-    }
-    catch {
-        if ((Test-Path -LiteralPath $previous) -and -not (Test-Path -LiteralPath $current)) {
-            Move-Item -LiteralPath $previous -Destination $current -Force -ErrorAction SilentlyContinue
-        }
-        throw
-    }
-    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' binary-swap-success')
-
-    # Keep the task/autostart target synchronized, but do not require permission to control the task itself.
     $localBinDir = Join-Path $env:LOCALAPPDATA 'FactoryBridge\bin'
     $localExe = Join-Path $localBinDir 'FactoryBridge.exe'
+    $localPrevious = Join-Path $localBinDir 'FactoryBridge.prev.exe'
     if (-not (Test-Path -LiteralPath $localBinDir -PathType Container)) {
         New-Item -ItemType Directory -Path $localBinDir -Force | Out-Null
     }
-    Copy-Item -LiteralPath $current -Destination $localExe -Force
-    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' autostart-binary-updated')
+    if (Test-Path -LiteralPath $localPrevious) { Remove-Item -LiteralPath $localPrevious -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $localExe) { Copy-Item -LiteralPath $localExe -Destination $localPrevious -Force }
+    Copy-Item -LiteralPath $staged -Destination $localExe -Force
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' local-runtime-promoted')
 
-    # Start the promoted binary directly at user level. The existing scheduled task, if any,
-    # points to the same local binary and remains a recovery mechanism for future logons/restarts.
-    Start-Process -FilePath $current -ArgumentList '--mode','supervisor' -WorkingDirectory $bridgeRoot
-    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' direct-supervisor-started')
-    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-success')
+    # Start from the local runtime. Existing scheduled task already targets this path.
+    Start-Process -FilePath $localExe -ArgumentList '--mode','supervisor' -WorkingDirectory $localBinDir
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' local-supervisor-started')
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-success-side-by-side')
 }
 catch {
     if ($null -ne $logPath) {
@@ -116,6 +104,6 @@ $payload = [ordered]@{
     source = $bridgeSource
     nextExe = $nextExe
     applyScript = $applyScript
-    promotion = 'user-level-no-task-control'
+    promotion = 'side-by-side-local-runtime'
 }
 Write-Output ($payload | ConvertTo-Json -Compress)
