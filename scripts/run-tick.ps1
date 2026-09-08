@@ -16,6 +16,37 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     throw "Configuration not found: $configPath"
 }
 
+function Invoke-FactoryBridgeUpdateIfRequested {
+    param([string]$ProjectPath)
+
+    $bridgeConfigPath = Join-Path $env:LOCALAPPDATA 'FactoryBridge\config.json'
+    if (-not (Test-Path -LiteralPath $bridgeConfigPath -PathType Leaf)) {
+        return $false
+    }
+    $bridgeConfig = Get-Content -LiteralPath $bridgeConfigPath -Raw | ConvertFrom-Json
+    $bridgeRoot = [string]$bridgeConfig.bridgeRoot
+    if ([string]::IsNullOrWhiteSpace($bridgeRoot)) {
+        return $false
+    }
+    $request = Join-Path $bridgeRoot '00_STATUS\factory-bridge-update.request.json'
+    if (-not (Test-Path -LiteralPath $request -PathType Leaf)) {
+        return $false
+    }
+
+    $updater = Join-Path $ProjectPath 'scripts\factory-bridge-update.ps1'
+    if (-not (Test-Path -LiteralPath $updater -PathType Leaf)) {
+        throw "FactoryBridge updater not found: $updater"
+    }
+
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $updater
+    if ($LASTEXITCODE -ne 0) {
+        throw "FactoryBridge updater failed with exit code $LASTEXITCODE."
+    }
+    Remove-Item -LiteralPath $request -Force
+    [Console]::Error.WriteLine('{"kind":"FACTORY_BRIDGE_UPDATE","status":"STAGED_AND_APPLY_SCHEDULED"}')
+    return $true
+}
+
 function Ensure-DispatcherScheduledTask {
     param([string]$ProjectPath)
     $taskName = 'ProjectFactory Dispatcher Tick'
@@ -117,6 +148,9 @@ if ($DryRun) {
 Push-Location -LiteralPath $projectPath
 try {
     if (-not $DryRun) {
+        if (Invoke-FactoryBridgeUpdateIfRequested -ProjectPath $projectPath) {
+            exit 0
+        }
         Ensure-DispatcherScheduledTask -ProjectPath $projectPath
     }
     else {

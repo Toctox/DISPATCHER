@@ -1,6 +1,8 @@
-# FactoryBridge v0.10.0
+# FactoryBridge v0.11.0
 
-Controlled local runner. Drive commands contain only `id` and a known `action`; no shell command, path, argument list, script body, branch, or commit SHA is accepted from Drive.
+Controlled local agent runtime. Drive commands contain only `id` and a known `action`; no shell command, path, argument list, script body, branch, or commit SHA is accepted from Drive.
+
+See [`docs/factory-bridge-agent-runtime-v1.md`](../docs/factory-bridge-agent-runtime-v1.md) for the architecture and operating model.
 
 ## Runtime roles
 
@@ -10,6 +12,14 @@ Controlled local runner. Drive commands contain only `id` and a known `action`; 
 
 ## Supported actions
 
+### Runtime diagnostics
+
+- `bridge.ping`
+- `bridge.doctor`
+- `system.info`
+
+`bridge.doctor` checks Git, .NET, PowerShell, optional Go self-update capability, and configured Bridge/Dispatcher/ProjectHub directories.
+
 ### ProjectHub
 
 - `projecthub.status`
@@ -18,6 +28,8 @@ Controlled local runner. Drive commands contain only `id` and a known `action`; 
 - `projecthub.test`
 - `projecthub.start`
 - `projecthub.stop`
+- `projecthub.logs`
+- `projecthub.validate`
 
 `projecthub.status` reports the local branch, `HEAD`, `origin/main`, dirty state, ahead/behind counts, application health, and whether the running server has Bridge-recorded commit provenance.
 
@@ -38,6 +50,10 @@ No branch or SHA can be supplied by Drive.
 
 `projecthub.stop` kills only the PID recorded in `00_STATUS/projecthub-process.json`. A healthy but untracked process is never killed automatically.
 
+`projecthub.logs` returns only bounded tails of the fixed Bridge-managed ProjectHub stdout/stderr logs.
+
+`projecthub.validate` owns a stopped-to-stopped validation lifecycle: canonical preflight, Release build, Release tests, managed start, health/provenance check, and managed stop. It refuses to run if ProjectHub is already active.
+
 Fixed ProjectHub commands remain:
 
 - restore: `dotnet restore ProjectHub.slnx --locked-mode`
@@ -47,8 +63,6 @@ Fixed ProjectHub commands remain:
 
 ### Existing bridge/dispatcher actions
 
-- `bridge.ping`
-- `system.info`
 - `git.status`
 - `git.pull` (only when local `allowGitPull=true`)
 - `git.push` (only when local `allowGitPush=true`)
@@ -63,8 +77,8 @@ Valid command shape:
 
 ```json
 {
-  "id": "PROJECTHUB-STATUS-001",
-  "action": "projecthub.status"
+  "id": "PROJECTHUB-VALIDATE-001",
+  "action": "projecthub.validate"
 }
 ```
 
@@ -89,7 +103,7 @@ Existing RESULT IDs remain idempotent: an already-produced result prevents re-ex
 - `executor.json`
 - `last_command.json`
 - `last_result.json`
-- `projecthub-process.json` when a v0.10+ Bridge-managed ProjectHub server is active.
+- `projecthub-process.json` when a Bridge-managed ProjectHub server is active.
 
 ## Local config
 
@@ -107,7 +121,15 @@ Existing RESULT IDs remain idempotent: an already-produced result prevents re-ex
 }
 ```
 
-`git.exe` and `dotnet.exe` must be available on `PATH` for ProjectHub actions.
+`git.exe`, `dotnet.exe`, and `powershell.exe` must be available on `PATH` for the normal ProjectHub runtime. `go.exe` is required only for source-based FactoryBridge self-update.
+
+## Self-update bootstrap
+
+After the DISPATCHER checkout is updated, create the fixed marker:
+
+`<bridgeRoot>\00_STATUS\factory-bridge-update.request.json`
+
+Then issue `dispatcher.tick`. The updated `scripts/run-tick.ps1` calls `scripts/factory-bridge-update.ps1`, which runs `go test ./...`, builds `FactoryBridge.next.exe`, and schedules replacement only after successful tests/build. The prior executable is retained as `FactoryBridge.prev.exe`.
 
 ## Run
 
