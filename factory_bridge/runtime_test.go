@@ -161,6 +161,48 @@ func TestProcessOneObservedPreservesExecutionEvidenceAndArchive(t *testing.T) {
 	}
 }
 
+func TestActionHeartbeatRefreshesExecutorDuringLongWork(t *testing.T) {
+	bridge := t.TempDir()
+	cfg := Config{BridgeRoot: bridge}
+	if err := ensureBridgeDirs(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	originalStarted := time.Now().Add(-time.Minute).Truncate(time.Second)
+	if err := writeExecutorStatus(cfg, originalStarted); err != nil {
+		t.Fatal(err)
+	}
+	before, err := readJSONFile[ExecutorStatus](statusPath(cfg, executorStatusFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stop := startExecutorActionHeartbeat(cfg, 15*time.Millisecond)
+	time.Sleep(55 * time.Millisecond)
+	after, err := readJSONFile[ExecutorStatus](statusPath(cfg, executorStatusFileName))
+	stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.PID != os.Getpid() {
+		t.Fatalf("heartbeat pid=%d want=%d", after.PID, os.Getpid())
+	}
+	if after.StartedAt != before.StartedAt {
+		t.Fatalf("heartbeat changed executor start: before=%s after=%s", before.StartedAt, after.StartedAt)
+	}
+	beforeBeat, err := time.Parse(time.RFC3339Nano, before.HeartbeatAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterBeat, err := time.Parse(time.RFC3339Nano, after.HeartbeatAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !afterBeat.After(beforeBeat) {
+		t.Fatalf("heartbeat did not advance: before=%s after=%s", before.HeartbeatAt, after.HeartbeatAt)
+	}
+}
+
 func TestStaleAndOfflineHeartbeatClassification(t *testing.T) {
 	bridge := t.TempDir()
 	cfg := Config{BridgeRoot: bridge, PollIntervalMs: 1000}
