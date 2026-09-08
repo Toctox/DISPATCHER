@@ -20,8 +20,17 @@ if ($null -eq $go) {
     throw 'go.exe is required for FactoryBridge self-update and was not found on PATH.'
 }
 
-$nextExe = Join-Path $bridgeRoot 'FactoryBridge.next.exe'
-$applyScript = Join-Path $bridgeRoot 'APPLY_FACTORY_BRIDGE_UPDATE.ps1'
+# Build and apply artifacts stay on the local disk. Google Drive is transport
+# and observability only; sync locks must not be able to break compilation.
+$stagingDir = Join-Path $env:LOCALAPPDATA 'FactoryBridge\staging'
+if (-not (Test-Path -LiteralPath $stagingDir -PathType Container)) {
+    New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
+}
+$nextExe = Join-Path $stagingDir 'FactoryBridge.next.exe'
+$applyScript = Join-Path $stagingDir 'APPLY_FACTORY_BRIDGE_UPDATE.ps1'
+if (Test-Path -LiteralPath $nextExe) {
+    Remove-Item -LiteralPath $nextExe -Force -ErrorAction SilentlyContinue
+}
 
 Push-Location -LiteralPath $bridgeSource
 try {
@@ -75,9 +84,7 @@ try {
     }
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' bridge-processes-stopped')
 
-    # Google Drive may hold a sync lock on FactoryBridge.exe. Do not rename/replace it.
-    # Promote the staged binary into the user-local runtime directory instead.
-    $staged = Join-Path $bridgeRoot 'FactoryBridge.next.exe'
+    $staged = Join-Path $env:LOCALAPPDATA 'FactoryBridge\staging\FactoryBridge.next.exe'
     if (-not (Test-Path -LiteralPath $staged -PathType Leaf)) { throw "Staged binary missing: $staged" }
 
     $localBinDir = Join-Path $env:LOCALAPPDATA 'FactoryBridge\bin'
@@ -123,5 +130,6 @@ $payload = [ordered]@{
     nextExe = $nextExe
     applyScript = $applyScript
     promotion = 'side-by-side-local-runtime'
+    staging = 'localappdata'
 }
 Write-Output ($payload | ConvertTo-Json -Compress)
