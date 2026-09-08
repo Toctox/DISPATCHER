@@ -98,14 +98,26 @@ try {
     Copy-Item -LiteralPath $staged -Destination $localExe -Force
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' local-runtime-promoted')
 
-    # Prefer the canonical scheduled supervisor when installed. Direct process
-    # startup is only a fallback for installations without the scheduled task.
+    # Prefer the canonical scheduled supervisor when installed. Heal a disabled
+    # task before starting it; if Task Scheduler still cannot launch it, fall
+    # back to one direct supervisor so the Bridge never remains offline.
     $scheduledTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    $scheduledStarted = $false
     if ($null -ne $scheduledTask) {
-        Start-ScheduledTask -TaskName $taskName
-        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' scheduled-supervisor-started')
+        try {
+            if ([string]$scheduledTask.State -eq 'Disabled') {
+                Enable-ScheduledTask -TaskName $taskName | Out-Null
+                Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' scheduled-supervisor-enabled')
+            }
+            Start-ScheduledTask -TaskName $taskName
+            $scheduledStarted = $true
+            Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' scheduled-supervisor-started')
+        }
+        catch {
+            Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' scheduled-supervisor-start-failed: ' + $_.Exception.Message)
+        }
     }
-    else {
+    if (-not $scheduledStarted) {
         Start-Process -FilePath $localExe -ArgumentList '--mode','supervisor' -WorkingDirectory $localBinDir
         Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' local-supervisor-started-fallback')
     }
