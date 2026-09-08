@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$postgresVersion = '18.6'
+$postgresVersion = '17.11'
 $packageRevision = '1'
 $downloadUrl = "https://get.enterprisedb.com/postgresql/postgresql-$postgresVersion-$packageRevision-windows-x64-binaries.zip"
 $root = Join-Path $env:LOCALAPPDATA 'ProjectHub\PostgreSQL'
