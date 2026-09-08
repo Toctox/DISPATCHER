@@ -203,6 +203,36 @@ func TestActionHeartbeatRefreshesExecutorDuringLongWork(t *testing.T) {
 	}
 }
 
+func TestOrderCommandEntriesUsesOldestTimestampBeforeFilename(t *testing.T) {
+	dir := t.TempDir()
+	older := filepath.Join(dir, "Z-older.json")
+	newer := filepath.Join(dir, "A-newer.json")
+	if err := os.WriteFile(older, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newer, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().Add(-time.Minute).Truncate(time.Second)
+	if err := os.Chtimes(older, base, base); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newer, base.Add(time.Second), base.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordered := orderCommandEntries(entries)
+	if len(ordered) != 2 {
+		t.Fatalf("ordered len=%d", len(ordered))
+	}
+	if ordered[0].Name() != "Z-older.json" || ordered[1].Name() != "A-newer.json" {
+		t.Fatalf("queue order=%s,%s", ordered[0].Name(), ordered[1].Name())
+	}
+}
+
 func TestStaleAndOfflineHeartbeatClassification(t *testing.T) {
 	bridge := t.TempDir()
 	cfg := Config{BridgeRoot: bridge, PollIntervalMs: 1000}
