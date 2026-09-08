@@ -26,13 +26,9 @@ $applyScript = Join-Path $bridgeRoot 'APPLY_FACTORY_BRIDGE_UPDATE.ps1'
 Push-Location -LiteralPath $bridgeSource
 try {
     & $go.Source test ./...
-    if ($LASTEXITCODE -ne 0) {
-        throw "FactoryBridge tests failed with exit code $LASTEXITCODE."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "FactoryBridge tests failed with exit code $LASTEXITCODE." }
     & $go.Source build -trimpath -ldflags '-s -w' -o $nextExe .
-    if ($LASTEXITCODE -ne 0) {
-        throw "FactoryBridge build failed with exit code $LASTEXITCODE."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "FactoryBridge build failed with exit code $LASTEXITCODE." }
 }
 finally {
     Pop-Location
@@ -46,7 +42,6 @@ $apply = @'
 $ErrorActionPreference = 'Stop'
 $configPath = Join-Path $env:LOCALAPPDATA 'FactoryBridge\config.json'
 $logPath = $null
-$taskName = 'FactoryBridge Supervisor'
 try {
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     $bridgeRoot = [string]$config.bridgeRoot
@@ -55,20 +50,14 @@ try {
         New-Item -ItemType Directory -Path $statusDir -Force | Out-Null
     }
     $logPath = Join-Path $statusDir 'factory-bridge-update.apply.log'
-    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-start')
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-start-user-level')
 
+    # Let dispatcher.tick finish writing its RESULT before terminating Bridge processes.
     Start-Sleep -Seconds 5
 
-    $scheduledTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    if ($null -ne $scheduledTask) {
-        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' stopping-scheduled-supervisor')
-        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-    }
-
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' stopping-bridge-processes')
-    Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue | Stop-Process -Force
-    for ($i = 0; $i -lt 20; $i++) {
+    Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    for ($i = 0; $i -lt 30; $i++) {
         if ($null -eq (Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue)) { break }
         Start-Sleep -Milliseconds 500
     }
@@ -79,32 +68,22 @@ try {
     $current = Join-Path $bridgeRoot 'FactoryBridge.exe'
     $next = Join-Path $bridgeRoot 'FactoryBridge.next.exe'
     $previous = Join-Path $bridgeRoot 'FactoryBridge.prev.exe'
-    if (-not (Test-Path -LiteralPath $next -PathType Leaf)) {
-        throw "Staged binary missing: $next"
-    }
+    if (-not (Test-Path -LiteralPath $next -PathType Leaf)) { throw "Staged binary missing: $next" }
 
-    $applied = $false
-    for ($attempt = 1; $attempt -le 30 -and -not $applied; $attempt++) {
-        try {
-            if (Test-Path -LiteralPath $previous) {
-                Remove-Item -LiteralPath $previous -Force
-            }
-            if (Test-Path -LiteralPath $current) {
-                Move-Item -LiteralPath $current -Destination $previous -Force
-            }
-            Move-Item -LiteralPath $next -Destination $current -Force
-            $applied = $true
-        }
-        catch {
-            Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + " swap-retry-$attempt: " + $_.Exception.Message)
-            if ($attempt -ge 30) { throw }
-            Start-Sleep -Seconds 1
-        }
+    if (Test-Path -LiteralPath $previous) { Remove-Item -LiteralPath $previous -Force -ErrorAction SilentlyContinue }
+    if (Test-Path -LiteralPath $current) { Move-Item -LiteralPath $current -Destination $previous -Force }
+    try {
+        Move-Item -LiteralPath $next -Destination $current -Force
     }
-
+    catch {
+        if ((Test-Path -LiteralPath $previous) -and -not (Test-Path -LiteralPath $current)) {
+            Move-Item -LiteralPath $previous -Destination $current -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' binary-swap-success')
 
-    # Keep the autostart task on the exact same binary as bridgeRoot.
+    # Keep the task/autostart target synchronized, but do not require permission to control the task itself.
     $localBinDir = Join-Path $env:LOCALAPPDATA 'FactoryBridge\bin'
     $localExe = Join-Path $localBinDir 'FactoryBridge.exe'
     if (-not (Test-Path -LiteralPath $localBinDir -PathType Container)) {
@@ -113,31 +92,10 @@ try {
     Copy-Item -LiteralPath $current -Destination $localExe -Force
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' autostart-binary-updated')
 
-    # Convert a fixed PostgreSQL request into a queue command only after v0.12 is in place.
-    $postgresRequest = Join-Path $statusDir 'postgres-install.request.json'
-    if (Test-Path -LiteralPath $postgresRequest -PathType Leaf) {
-        $commandsDir = Join-Path $bridgeRoot '01_COMMANDS'
-        if (-not (Test-Path -LiteralPath $commandsDir -PathType Container)) {
-            New-Item -ItemType Directory -Path $commandsDir -Force | Out-Null
-        }
-        $postgresCommandPath = Join-Path $commandsDir 'COMMAND__POSTGRES-INSTALL-LOCAL-001.json'
-        $postgresResultPath = Join-Path (Join-Path $bridgeRoot '02_RESULTS') 'RESULT__POSTGRES-INSTALL-LOCAL-001.json'
-        if (-not (Test-Path -LiteralPath $postgresCommandPath) -and -not (Test-Path -LiteralPath $postgresResultPath)) {
-            $command = [ordered]@{ id = 'POSTGRES-INSTALL-LOCAL-001'; action = 'postgres.install' }
-            [IO.File]::WriteAllText($postgresCommandPath, ($command | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
-            Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' postgres-install-command-enqueued')
-        }
-        Remove-Item -LiteralPath $postgresRequest -Force
-    }
-
-    if ($null -ne $scheduledTask) {
-        Start-ScheduledTask -TaskName $taskName
-        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' scheduled-supervisor-started')
-    }
-    else {
-        Start-Process -FilePath $current -ArgumentList '--mode','supervisor' -WorkingDirectory $bridgeRoot
-        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' direct-supervisor-started')
-    }
+    # Start the promoted binary directly at user level. The existing scheduled task, if any,
+    # points to the same local binary and remains a recovery mechanism for future logons/restarts.
+    Start-Process -FilePath $current -ArgumentList '--mode','supervisor' -WorkingDirectory $bridgeRoot
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' direct-supervisor-started')
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-success')
 }
 catch {
@@ -158,5 +116,6 @@ $payload = [ordered]@{
     source = $bridgeSource
     nextExe = $nextExe
     applyScript = $applyScript
+    promotion = 'user-level-no-task-control'
 }
 Write-Output ($payload | ConvertTo-Json -Compress)
