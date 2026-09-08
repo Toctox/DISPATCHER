@@ -105,7 +105,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $dataDir 'PG_VERSION') -PathType Lea
     $pwFile = Join-Path $env:TEMP ("factorybridge-postgres-" + [Guid]::NewGuid().ToString('N') + '.pw')
     try {
         [IO.File]::WriteAllText($pwFile, $password, (New-Object Text.UTF8Encoding($false)))
-        & $initdb '-D' $dataDir '-L' $shareDir '-U' $superuser '-A' 'scram-sha-256' '--encoding=UTF8' "--pwfile=$pwFile" | Out-Null
+        & $initdb '-D' $dataDir '-L' $shareDir '-U' $superuser '-A' 'scram-sha-256' '--encoding=UTF8' '--locale=C' '--locale-provider=builtin' '--builtin-locale=C.UTF-8' "--pwfile=$pwFile" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "initdb failed with exit code $LASTEXITCODE" }
     }
     finally {
