@@ -59,8 +59,6 @@ try {
 
     Start-Sleep -Seconds 5
 
-    # Prevent Task Scheduler from racing the binary swap by immediately restarting
-    # the supervisor after we stop it.
     $scheduledTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     if ($null -ne $scheduledTask) {
         Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' stopping-scheduled-supervisor')
@@ -106,8 +104,16 @@ try {
 
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' binary-swap-success')
 
-    # A postgres install request is only converted into a real queue command after
-    # the new binary is already in place. This prevents v0.11 from consuming it.
+    # Keep the autostart task on the exact same binary as bridgeRoot.
+    $localBinDir = Join-Path $env:LOCALAPPDATA 'FactoryBridge\bin'
+    $localExe = Join-Path $localBinDir 'FactoryBridge.exe'
+    if (-not (Test-Path -LiteralPath $localBinDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $localBinDir -Force | Out-Null
+    }
+    Copy-Item -LiteralPath $current -Destination $localExe -Force
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' autostart-binary-updated')
+
+    # Convert a fixed PostgreSQL request into a queue command only after v0.12 is in place.
     $postgresRequest = Join-Path $statusDir 'postgres-install.request.json'
     if (Test-Path -LiteralPath $postgresRequest -PathType Leaf) {
         $commandsDir = Join-Path $bridgeRoot '01_COMMANDS'
@@ -143,8 +149,6 @@ catch {
 '@
 Set-Content -LiteralPath $applyScript -Value $apply -Encoding UTF8
 
-# Start-Process joins ArgumentList items without preserving quotes around paths with spaces.
-# Build one explicit command line and make the generated apply script discover bridgeRoot from local config.
 $launchArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$applyScript`""
 Start-Process -FilePath 'powershell.exe' -ArgumentList $launchArgs -WindowStyle Hidden
 
