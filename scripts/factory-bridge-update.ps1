@@ -46,6 +46,7 @@ $apply = @'
 $ErrorActionPreference = 'Stop'
 $configPath = Join-Path $env:LOCALAPPDATA 'FactoryBridge\config.json'
 $logPath = $null
+$taskName = 'FactoryBridge Supervisor'
 try {
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     $bridgeRoot = [string]$config.bridgeRoot
@@ -57,8 +58,25 @@ try {
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-start')
 
     Start-Sleep -Seconds 5
+
+    # Prevent Task Scheduler from racing the binary swap by immediately restarting
+    # the supervisor after we stop it.
+    $scheduledTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($null -ne $scheduledTask) {
+        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' stopping-scheduled-supervisor')
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+    }
+
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' stopping-bridge-processes')
     Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Seconds 2
+    for ($i = 0; $i -lt 20; $i++) {
+        if ($null -eq (Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($null -ne (Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue)) {
+        throw 'FactoryBridge processes did not stop before binary swap.'
+    }
 
     $current = Join-Path $bridgeRoot 'FactoryBridge.exe'
     $next = Join-Path $bridgeRoot 'FactoryBridge.next.exe'
@@ -68,7 +86,7 @@ try {
     }
 
     $applied = $false
-    for ($attempt = 1; $attempt -le 10 -and -not $applied; $attempt++) {
+    for ($attempt = 1; $attempt -le 30 -and -not $applied; $attempt++) {
         try {
             if (Test-Path -LiteralPath $previous) {
                 Remove-Item -LiteralPath $previous -Force
@@ -80,12 +98,21 @@ try {
             $applied = $true
         }
         catch {
-            if ($attempt -ge 10) { throw }
+            Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + " swap-retry-$attempt: " + $_.Exception.Message)
+            if ($attempt -ge 30) { throw }
             Start-Sleep -Seconds 1
         }
     }
 
-    Start-Process -FilePath $current -ArgumentList '--mode','supervisor' -WorkingDirectory $bridgeRoot
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' binary-swap-success')
+    if ($null -ne $scheduledTask) {
+        Start-ScheduledTask -TaskName $taskName
+        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' scheduled-supervisor-started')
+    }
+    else {
+        Start-Process -FilePath $current -ArgumentList '--mode','supervisor' -WorkingDirectory $bridgeRoot
+        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' direct-supervisor-started')
+    }
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-success')
 }
 catch {
