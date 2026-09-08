@@ -105,6 +105,25 @@ try {
     }
 
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' binary-swap-success')
+
+    # A postgres install request is only converted into a real queue command after
+    # the new binary is already in place. This prevents v0.11 from consuming it.
+    $postgresRequest = Join-Path $statusDir 'postgres-install.request.json'
+    if (Test-Path -LiteralPath $postgresRequest -PathType Leaf) {
+        $commandsDir = Join-Path $bridgeRoot '01_COMMANDS'
+        if (-not (Test-Path -LiteralPath $commandsDir -PathType Container)) {
+            New-Item -ItemType Directory -Path $commandsDir -Force | Out-Null
+        }
+        $postgresCommandPath = Join-Path $commandsDir 'COMMAND__POSTGRES-INSTALL-LOCAL-001.json'
+        $postgresResultPath = Join-Path (Join-Path $bridgeRoot '02_RESULTS') 'RESULT__POSTGRES-INSTALL-LOCAL-001.json'
+        if (-not (Test-Path -LiteralPath $postgresCommandPath) -and -not (Test-Path -LiteralPath $postgresResultPath)) {
+            $command = [ordered]@{ id = 'POSTGRES-INSTALL-LOCAL-001'; action = 'postgres.install' }
+            [IO.File]::WriteAllText($postgresCommandPath, ($command | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+            Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' postgres-install-command-enqueued')
+        }
+        Remove-Item -LiteralPath $postgresRequest -Force
+    }
+
     if ($null -ne $scheduledTask) {
         Start-ScheduledTask -TaskName $taskName
         Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' scheduled-supervisor-started')
