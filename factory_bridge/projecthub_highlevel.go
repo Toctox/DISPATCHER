@@ -5,29 +5,26 @@ import (
 	"time"
 )
 
-// executeProjectHubSnapshot consolidates the most useful read-only runtime
-// evidence into one Drive round-trip. It does not mutate either checkout.
+// executeProjectHubSnapshot returns a compact, read-only runtime snapshot for
+// frequent agent loops. Detailed server logs stay behind projecthub.logs so a
+// healthy observation does not flood the model context with repeated output.
 func executeProjectHubSnapshot(cfg Config, cmd Command, start time.Time, r runner) Result {
 	res := baseResult(cmd, start)
 	res.LogicalCommand = "projecthub.snapshot"
 	res.Meta["project"] = "ProjectHub"
 	res.Meta["agentRuntimeVersion"] = agentRuntimeVersion
-	res.Meta["pipeline"] = []string{"bridge.doctor", "projecthub.status", "projecthub.logs"}
+	res.Meta["pipeline"] = []string{"bridge.doctor", "projecthub.status"}
 
 	doctor := executeBridgeDoctor(cfg, Command{ID: cmd.ID, Action: "bridge.doctor"}, time.Now())
 	status := executeProjectHubStatusCanonical(cfg, Command{ID: cmd.ID, Action: "projecthub.status"}, time.Now(), r)
-	logs := executeProjectHubLogs(cfg, Command{ID: cmd.ID, Action: "projecthub.logs"}, time.Now())
 
 	res.Meta["steps"] = []map[string]any{
 		stepSummary("bridge.doctor", doctor),
 		stepSummary("projecthub.status", status),
-		stepSummary("projecthub.logs", logs),
 	}
-	res.Meta["doctor"] = doctor.Meta
+	res.Meta["runtime"] = doctor.Output
 	res.Meta["projecthub"] = status.Meta
-	res.Meta["logs"] = logs.Meta
-	res.Stdout = truncate("[projecthub.status]\n"+status.Stdout+"\n[projecthub.logs.stdout]\n"+logs.Stdout, 128*1024)
-	res.Stderr = truncate("[projecthub.logs.stderr]\n"+logs.Stderr, 128*1024)
+	res.Meta["logsAvailableVia"] = "projecthub.logs"
 
 	if doctor.Status != "ok" {
 		res.Error = "snapshot failed at bridge.doctor: " + doctor.Error
@@ -36,11 +33,6 @@ func executeProjectHubSnapshot(cfg Config, cmd Command, start time.Time, r runne
 	}
 	if status.Status != "ok" {
 		res.Error = "snapshot failed at projecthub.status: " + status.Error
-		finish(&res, start)
-		return res
-	}
-	if logs.Status != "ok" {
-		res.Error = "snapshot failed at projecthub.logs: " + logs.Error
 		finish(&res, start)
 		return res
 	}
