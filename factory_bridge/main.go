@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const bridgeVersion = "0.11.0"
+const bridgeVersion = "0.12.0"
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
@@ -150,6 +150,9 @@ func executeAction(cfg Config, cmd Command, r runner) Result {
 		res.Output = fmt.Sprintf("hostname=%s os=%s arch=%s", host, runtime.GOOS, runtime.GOARCH)
 		finish(&res, start)
 		return res
+
+	case "postgres.install":
+		return executePostgresInstall(cfg, cmd, start, r)
 
 	case "projecthub.status":
 		return executeProjectHubStatusCanonical(cfg, cmd, start, r)
