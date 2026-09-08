@@ -20,6 +20,7 @@ const (
 	executorStaleThreshold    = 90 * time.Second
 	supervisorOnlineThreshold = 30 * time.Second
 	supervisorStaleThreshold  = 90 * time.Second
+	actionHeartbeatInterval   = 10 * time.Second
 )
 
 type ExecutorStatus struct {
@@ -42,19 +43,19 @@ type SupervisorStatus struct {
 }
 
 type PanelSnapshot struct {
-	BridgeVersion      string
-	BridgeRoot         string
-	SupervisorState    string
-	SupervisorPID      int
+	BridgeVersion       string
+	BridgeRoot          string
+	SupervisorState     string
+	SupervisorPID       int
 	SupervisorHeartbeat string
-	SupervisorRestarts int
-	ExecutorState      string
-	ExecutorOnline     bool
-	ExecutorPID        int
-	HeartbeatAt        string
-	PendingCount       int
-	LastCommand        *Command
-	LastResult         *Result
+	SupervisorRestarts  int
+	ExecutorState       string
+	ExecutorOnline      bool
+	ExecutorPID         int
+	HeartbeatAt         string
+	PendingCount        int
+	LastCommand         *Command
+	LastResult          *Result
 }
 
 func ensureBridgeDirs(cfg Config) error {
@@ -78,6 +79,46 @@ func writeExecutorStatus(cfg Config, started time.Time) error {
 		StartedAt:     started.Format(time.RFC3339),
 		HeartbeatAt:   now.Format(time.RFC3339Nano),
 	})
+}
+
+// startExecutorActionHeartbeat keeps executor.json fresh while a single
+// allowlisted action is running. Without this, the executor loop cannot touch
+// its heartbeat until the action returns and the supervisor may incorrectly
+// classify a healthy long-running build/test as hung after 90 seconds.
+func startExecutorActionHeartbeat(cfg Config, interval time.Duration) func() {
+	if interval <= 0 {
+		interval = actionHeartbeatInterval
+	}
+
+	started := time.Now()
+	if state, err := readJSONFile[ExecutorStatus](statusPath(cfg, executorStatusFileName)); err == nil && state.PID == os.Getpid() {
+		if parsed, parseErr := time.Parse(time.RFC3339, state.StartedAt); parseErr == nil {
+			started = parsed
+		}
+	}
+	_ = writeExecutorStatus(cfg, started)
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				_ = writeExecutorStatus(cfg, started)
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	return func() {
+		close(stop)
+		<-done
+		_ = writeExecutorStatus(cfg, started)
+	}
 }
 
 func observeCommand(cfg Config, path string) {
@@ -107,7 +148,9 @@ func observeResult(cfg Config, commandPath string) {
 func processOneObserved(cfg Config, path string, r runner) error {
 	observeCommand(cfg, path)
 	cmd, decodeErr := decodeCommand(path)
+	stopHeartbeat := startExecutorActionHeartbeat(cfg, actionHeartbeatInterval)
 	err := processOne(cfg, path, r)
+	stopHeartbeat()
 	if decodeErr == nil {
 		data, readErr := os.ReadFile(filepath.Join(cfg.BridgeRoot, "02_RESULTS", "RESULT__"+cmd.ID+".json"))
 		if readErr == nil {
