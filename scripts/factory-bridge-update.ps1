@@ -21,8 +21,6 @@ if ($null -eq $go) {
 }
 
 $nextExe = Join-Path $bridgeRoot 'FactoryBridge.next.exe'
-$currentExe = Join-Path $bridgeRoot 'FactoryBridge.exe'
-$previousExe = Join-Path $bridgeRoot 'FactoryBridge.prev.exe'
 $applyScript = Join-Path $bridgeRoot 'APPLY_FACTORY_BRIDGE_UPDATE.ps1'
 
 Push-Location -LiteralPath $bridgeSource
@@ -45,32 +43,64 @@ if (-not (Test-Path -LiteralPath $nextExe -PathType Leaf)) {
 }
 
 $apply = @'
-param(
-    [Parameter(Mandatory=$true)][string]$BridgeRoot
-)
 $ErrorActionPreference = 'Stop'
-Start-Sleep -Seconds 5
-Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Seconds 2
-$current = Join-Path $BridgeRoot 'FactoryBridge.exe'
-$next = Join-Path $BridgeRoot 'FactoryBridge.next.exe'
-$previous = Join-Path $BridgeRoot 'FactoryBridge.prev.exe'
-if (-not (Test-Path -LiteralPath $next -PathType Leaf)) { throw "Staged binary missing: $next" }
-if (Test-Path -LiteralPath $previous) { Remove-Item -LiteralPath $previous -Force }
-if (Test-Path -LiteralPath $current) { Move-Item -LiteralPath $current -Destination $previous -Force }
-Move-Item -LiteralPath $next -Destination $current -Force
-Start-Process -FilePath $current -ArgumentList '--mode','supervisor' -WorkingDirectory $BridgeRoot
+$configPath = Join-Path $env:LOCALAPPDATA 'FactoryBridge\config.json'
+$logPath = $null
+try {
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    $bridgeRoot = [string]$config.bridgeRoot
+    $statusDir = Join-Path $bridgeRoot '00_STATUS'
+    if (-not (Test-Path -LiteralPath $statusDir -PathType Container)) {
+        New-Item -ItemType Directory -Path $statusDir -Force | Out-Null
+    }
+    $logPath = Join-Path $statusDir 'factory-bridge-update.apply.log'
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-start')
+
+    Start-Sleep -Seconds 5
+    Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 2
+
+    $current = Join-Path $bridgeRoot 'FactoryBridge.exe'
+    $next = Join-Path $bridgeRoot 'FactoryBridge.next.exe'
+    $previous = Join-Path $bridgeRoot 'FactoryBridge.prev.exe'
+    if (-not (Test-Path -LiteralPath $next -PathType Leaf)) {
+        throw "Staged binary missing: $next"
+    }
+
+    $applied = $false
+    for ($attempt = 1; $attempt -le 10 -and -not $applied; $attempt++) {
+        try {
+            if (Test-Path -LiteralPath $previous) {
+                Remove-Item -LiteralPath $previous -Force
+            }
+            if (Test-Path -LiteralPath $current) {
+                Move-Item -LiteralPath $current -Destination $previous -Force
+            }
+            Move-Item -LiteralPath $next -Destination $current -Force
+            $applied = $true
+        }
+        catch {
+            if ($attempt -ge 10) { throw }
+            Start-Sleep -Seconds 1
+        }
+    }
+
+    Start-Process -FilePath $current -ArgumentList '--mode','supervisor' -WorkingDirectory $bridgeRoot
+    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-success')
+}
+catch {
+    if ($null -ne $logPath) {
+        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-failed: ' + $_.Exception.Message)
+    }
+    exit 1
+}
 '@
 Set-Content -LiteralPath $applyScript -Value $apply -Encoding UTF8
 
-Start-Process -FilePath 'powershell.exe' -ArgumentList @(
-    '-NoLogo',
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy', 'Bypass',
-    '-File', $applyScript,
-    '-BridgeRoot', $bridgeRoot
-) -WindowStyle Hidden
+# Start-Process joins ArgumentList items without preserving quotes around paths with spaces.
+# Build one explicit command line and make the generated apply script discover bridgeRoot from local config.
+$launchArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$applyScript`""
+Start-Process -FilePath 'powershell.exe' -ArgumentList $launchArgs -WindowStyle Hidden
 
 $payload = [ordered]@{
     kind = 'FACTORY_BRIDGE_UPDATE'
