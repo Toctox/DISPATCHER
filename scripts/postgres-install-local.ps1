@@ -7,9 +7,10 @@ $ProgressPreference = 'SilentlyContinue'
 
 $postgresVersion = '17.11'
 $packageRevision = '1'
+$installSlot = '17.11-portable-r2'
 $downloadUrl = "https://get.enterprisedb.com/postgresql/postgresql-$postgresVersion-$packageRevision-windows-x64-binaries.zip"
 $root = Join-Path $env:LOCALAPPDATA 'ProjectHub\PostgreSQL'
-$installDir = Join-Path $root $postgresVersion
+$installDir = Join-Path $root $installSlot
 $dataDir = Join-Path $root 'data'
 $downloadDir = Join-Path $root 'downloads'
 $secretDir = Join-Path $root 'secrets'
@@ -59,12 +60,12 @@ $initialized = $false
 $started = $false
 
 if ($null -eq $binDir -or $null -eq $shareDir) {
+    if (Test-Path -LiteralPath $installDir) {
+        throw "Immutable PostgreSQL install slot is incomplete: $installDir"
+    }
     if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
         Invoke-WebRequest -Uri $downloadUrl -OutFile $archive -UseBasicParsing
         $downloaded = $true
-    }
-    if (Test-Path -LiteralPath $installDir) {
-        Remove-Item -LiteralPath $installDir -Recurse -Force
     }
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
     Expand-Archive -LiteralPath $archive -DestinationPath $installDir -Force
@@ -169,6 +170,7 @@ catch {
 $runtime = [ordered]@{
     managedBy = 'FactoryBridge'
     version = $postgresVersion
+    installSlot = $installSlot
     installDir = $installDir
     binDir = $binDir
     shareDir = $shareDir
