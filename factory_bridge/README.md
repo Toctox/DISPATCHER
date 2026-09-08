@@ -1,4 +1,4 @@
-# FactoryBridge v0.11.0
+# FactoryBridge v0.13.0
 
 Controlled local agent runtime. Drive commands contain only `id` and a known `action`; no shell command, path, argument list, script body, branch, or commit SHA is accepted from Drive.
 
@@ -20,7 +20,7 @@ See [`docs/factory-bridge-agent-runtime-v1.md`](../docs/factory-bridge-agent-run
 
 `bridge.doctor` checks Git, .NET, PowerShell, optional Go self-update capability, and configured Bridge/Dispatcher/ProjectHub directories.
 
-### ProjectHub
+### ProjectHub — atomic actions
 
 - `projecthub.status`
 - `projecthub.sync`
@@ -54,12 +54,36 @@ No branch or SHA can be supplied by Drive.
 
 `projecthub.validate` owns a stopped-to-stopped validation lifecycle: canonical preflight, Release build, Release tests, managed start, health/provenance check, and managed stop. It refuses to run if ProjectHub is already active.
 
+### ProjectHub — high-level actions (v0.13)
+
+These actions reduce model/Drive round-trips while preserving the same allowlist boundary.
+
+- `projecthub.snapshot` — runs `bridge.doctor`, canonical `projecthub.status`, and bounded `projecthub.logs`, returning one consolidated evidence payload without mutating either checkout.
+- `projecthub.verify` — one canonical preflight followed by Release build and tests; it never starts the server. This is the preferred tight-loop action while iterating on implementation.
+- `projecthub.refresh_validate` — performs safe fast-forward `projecthub.sync` and then the complete stopped-to-stopped `projecthub.validate` pipeline. This is the preferred post-commit validation action.
+
+Typical autonomous worker cycle:
+
+```text
+projecthub.snapshot
+  -> decide/edit in GitHub
+  -> projecthub.refresh_validate
+  -> if failure: inspect consolidated evidence / projecthub.logs
+  -> correct and repeat
+```
+
 Fixed ProjectHub commands remain:
 
 - restore: `dotnet restore ProjectHub.slnx --locked-mode`
 - build: `dotnet build ProjectHub.slnx --configuration Release --no-restore`
 - test: `dotnet test ProjectHub.slnx --configuration Release --no-build --no-restore`
 - start: `dotnet run --project src/ProjectHub.Server --configuration Release --no-build --no-launch-profile --urls http://127.0.0.1:5080`
+
+### PostgreSQL local
+
+- `postgres.install`
+
+The PostgreSQL action remains explicitly allowlisted and keeps local credentials on the notebook; secrets are not returned through Drive results.
 
 ### Existing bridge/dispatcher actions
 
@@ -77,8 +101,8 @@ Valid command shape:
 
 ```json
 {
-  "id": "PROJECTHUB-VALIDATE-001",
-  "action": "projecthub.validate"
+  "id": "PROJECTHUB-REFRESH-VALIDATE-001",
+  "action": "projecthub.refresh_validate"
 }
 ```
 
@@ -94,6 +118,8 @@ Every command writes `02_RESULTS/RESULT__<id>.json` containing structured eviden
 - `startedAt` / `finishedAt` / `durationMs`
 - fixed `logicalCommand`
 - action-specific metadata, including ProjectHub commit provenance where applicable.
+
+High-level actions additionally return ordered `meta.steps` and nested evidence for their component operations.
 
 Existing RESULT IDs remain idempotent: an already-produced result prevents re-execution and the incoming command is archived.
 
