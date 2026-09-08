@@ -54,6 +54,16 @@ try {
 
     Start-Sleep -Seconds 5
 
+    # A scheduled supervisor and a directly started supervisor must never run
+    # at the same time: they would spawn competing executors that overwrite
+    # executor.json with different PIDs and trigger false stale-heartbeat kills.
+    $taskName = 'FactoryBridge Supervisor'
+    $scheduledTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($null -ne $scheduledTask) {
+        Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' scheduled-supervisor-stopped')
+    }
+
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' stopping-bridge-processes')
     Get-Process -Name 'FactoryBridge' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     for ($i = 0; $i -lt 30; $i++) {
@@ -81,9 +91,17 @@ try {
     Copy-Item -LiteralPath $staged -Destination $localExe -Force
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' local-runtime-promoted')
 
-    # Start from the local runtime. Existing scheduled task already targets this path.
-    Start-Process -FilePath $localExe -ArgumentList '--mode','supervisor' -WorkingDirectory $localBinDir
-    Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' local-supervisor-started')
+    # Prefer the canonical scheduled supervisor when installed. Direct process
+    # startup is only a fallback for installations without the scheduled task.
+    $scheduledTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($null -ne $scheduledTask) {
+        Start-ScheduledTask -TaskName $taskName
+        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' scheduled-supervisor-started')
+    }
+    else {
+        Start-Process -FilePath $localExe -ArgumentList '--mode','supervisor' -WorkingDirectory $localBinDir
+        Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' local-supervisor-started-fallback')
+    }
     Add-Content -LiteralPath $logPath -Value ((Get-Date).ToString('o') + ' apply-success-side-by-side')
 }
 catch {
