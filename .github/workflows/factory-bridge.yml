@@ -5,10 +5,14 @@ on:
     branches: [main]
     paths:
       - 'factory_bridge/**'
+      - 'scripts/factory-bridge-admin-poller.ps1'
+      - 'scripts/factory-bridge-autoupdate.ps1'
       - '.github/workflows/factory-bridge.yml'
   pull_request:
     paths:
       - 'factory_bridge/**'
+      - 'scripts/factory-bridge-admin-poller.ps1'
+      - 'scripts/factory-bridge-autoupdate.ps1'
       - '.github/workflows/factory-bridge.yml'
   workflow_dispatch:
 
@@ -27,6 +31,29 @@ jobs:
         with:
           go-version: '1.23.x'
           cache-dependency-path: factory_bridge/go.sum
+      - name: Validate admin PowerShell scripts with Windows PowerShell 5.1
+        shell: powershell
+        working-directory: .
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $scripts = @(
+            'scripts\factory-bridge-admin-poller.ps1',
+            'scripts\factory-bridge-autoupdate.ps1'
+          )
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Join-Path $env:GITHUB_WORKSPACE $script),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $messages = ($errors | ForEach-Object { $_.Message }) -join '; '
+              throw "$script parser errors: $messages"
+            }
+            Write-Host "$script parser=OK"
+          }
       - name: Test
         run: go test ./...
       - name: Build Windows executable
