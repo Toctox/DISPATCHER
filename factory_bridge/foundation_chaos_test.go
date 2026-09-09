@@ -65,3 +65,19 @@ func TestCancellationCannotBeResumed(t *testing.T) {
 		t.Fatalf("cancelled mission must not resume, got %v", err)
 	}
 }
+
+func TestMissionControlRejectsAlreadyTerminalJournal(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	for _, state := range []string{"DONE", "NEEDS_BRAIN", "BLOCKED"} {
+		m := hardenedTestMission(t, "M-TERMINAL-"+state)
+		if _, _, err := reserveMission(m); err != nil {
+			t.Fatal(err)
+		}
+		if err := markMissionJournalState(m.ID, state); err != nil {
+			t.Fatal(err)
+		}
+		if err := setMissionControl(m.ID, "CANCEL"); err == nil || !strings.Contains(err.Error(), "already terminal") {
+			t.Fatalf("state %s should reject control, got %v", state, err)
+		}
+	}
+}
