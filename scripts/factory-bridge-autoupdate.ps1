@@ -7,27 +7,51 @@ $stateDir = Join-Path $root 'state'
 $stagingDir = Join-Path $root 'staging'
 $sourceDir = Join-Path $root 'source\DISPATCHER'
 $binDir = Join-Path $root 'bin'
+$adminDir = Join-Path $root 'admin'
 $installedExe = Join-Path $binDir 'FactoryBridge.exe'
 $previousExe = Join-Path $binDir 'FactoryBridge.prev.exe'
 $nextExe = Join-Path $stagingDir 'FactoryBridge.next.exe'
 $requestPath = Join-Path $stateDir 'self-update-request.json'
 $resultPath = Join-Path $stateDir 'self-update-result.json'
 $installedStatePath = Join-Path $stateDir 'installed-runtime.json'
+$knownGoodStatePath = Join-Path $stateDir 'last-known-good-runtime.json'
 $repo = 'https://github.com/Toctox/DISPATCHER.git'
 $supervisorTask = 'FactoryBridge Supervisor'
 
-New-Item -ItemType Directory -Path $stateDir,$stagingDir,$binDir,(Split-Path $sourceDir -Parent) -Force | Out-Null
+New-Item -ItemType Directory -Path $stateDir,$stagingDir,$binDir,$adminDir,(Split-Path $sourceDir -Parent) -Force | Out-Null
 
-function Write-Result([string]$State, [string]$TargetCommit, [string]$Summary, [bool]$Healthy) {
+function Write-JsonAtomic([string]$Path, $Value) {
+    $tmp = $Path + '.tmp'
+    [System.IO.File]::WriteAllText($tmp, ($Value | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
+function Write-Result([string]$State, [string]$TargetCommit, [string]$Summary, [bool]$Healthy, [bool]$AdminAssetsSynced = $false) {
     $payload = [ordered]@{
         state = $State
         targetCommit = $TargetCommit
         summary = $Summary
         healthy = $Healthy
+        adminAssetsSynced = $AdminAssetsSynced
         observedAt = (Get-Date).ToUniversalTime().ToString('o')
     }
-    [System.IO.File]::WriteAllText($resultPath, ($payload | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+    Write-JsonAtomic -Path $resultPath -Value $payload
     return $payload
+}
+
+function Sync-AdminAssets([string]$SourceRoot) {
+    $assetMap = @(
+        @{ source = (Join-Path $SourceRoot 'scripts\factory-bridge-autoupdate.ps1'); destination = (Join-Path $adminDir 'factory-bridge-autoupdate.ps1') },
+        @{ source = (Join-Path $SourceRoot 'scripts\factory-bridge-admin-poller.ps1'); destination = (Join-Path $adminDir 'factory-bridge-admin-poller.ps1') }
+    )
+    foreach ($asset in $assetMap) {
+        if (-not (Test-Path -LiteralPath $asset.source -PathType Leaf)) {
+            throw ('required admin asset missing from approved source: ' + $asset.source)
+        }
+        $tmp = $asset.destination + '.next'
+        Copy-Item -LiteralPath $asset.source -Destination $tmp -Force
+        Move-Item -LiteralPath $tmp -Destination $asset.destination -Force
+    }
 }
 
 if (-not (Test-Path -LiteralPath $requestPath -PathType Leaf)) {
@@ -48,6 +72,7 @@ if ($null -eq $git -or $null -eq $go) {
     exit 3
 }
 
+$priorInstalledCommit = ''
 try {
     if (Test-Path -LiteralPath (Join-Path $sourceDir '.git') -PathType Container) {
         & $git.Source -C $sourceDir fetch --prune origin main
@@ -69,8 +94,10 @@ try {
     if (Test-Path -LiteralPath $installedStatePath -PathType Leaf) {
         try {
             $installedState = Get-Content -LiteralPath $installedStatePath -Raw | ConvertFrom-Json
-            if (([string]$installedState.sourceCommit).Trim().ToLowerInvariant() -eq $target) {
-                Write-Result -State 'NOOP' -TargetCommit $target -Summary 'approved commit is already installed' -Healthy $true | Out-Null
+            $priorInstalledCommit = ([string]$installedState.sourceCommit).Trim().ToLowerInvariant()
+            if ($priorInstalledCommit -eq $target) {
+                Sync-AdminAssets -SourceRoot $sourceDir
+                Write-Result -State 'NOOP' -TargetCommit $target -Summary 'approved runtime is already installed; admin control assets synchronized' -Healthy $true -AdminAssetsSynced $true | Out-Null
                 exit 0
             }
         } catch { }
@@ -148,13 +175,39 @@ try {
         exit 4
     }
 
+    $adminAssetsSynced = $false
+    try {
+        Sync-AdminAssets -SourceRoot $sourceDir
+        $adminAssetsSynced = $true
+    }
+    catch {
+        # Runtime promotion remains valid; record degraded admin-asset sync explicitly.
+        $adminAssetsSynced = $false
+    }
+
+    if ($priorInstalledCommit -match '^[0-9a-f]{40}$') {
+        $knownGood = [ordered]@{
+            sourceCommit = $priorInstalledCommit
+            recordedAt = (Get-Date).ToUniversalTime().ToString('o')
+            reason = 'previous installed runtime preserved before successful promotion'
+        }
+        Write-JsonAtomic -Path $knownGoodStatePath -Value $knownGood
+    }
+
     $installedState = [ordered]@{
         sourceCommit = $target
         installedAt = (Get-Date).ToUniversalTime().ToString('o')
+        adminAssetsSynced = $adminAssetsSynced
         health = [ordered]@{ ok = $true; executorOnline = $true }
     }
-    [System.IO.File]::WriteAllText($installedStatePath, ($installedState | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
-    Write-Result -State 'DONE' -TargetCommit $target -Summary 'tests, build, promotion and post-update health validation passed' -Healthy $true | Out-Null
+    Write-JsonAtomic -Path $installedStatePath -Value $installedState
+
+    if ($adminAssetsSynced) {
+        Write-Result -State 'DONE' -TargetCommit $target -Summary 'tests, build, promotion, post-update health and admin control asset synchronization passed' -Healthy $true -AdminAssetsSynced $true | Out-Null
+    }
+    else {
+        Write-Result -State 'DONE' -TargetCommit $target -Summary 'runtime promotion and health passed; admin control asset synchronization needs attention' -Healthy $true -AdminAssetsSynced $false | Out-Null
+    }
     exit 0
 }
 catch {
