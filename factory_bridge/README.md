@@ -1,185 +1,213 @@
 # FactoryBridge v0.13.0
 
-Controlled local agent runtime. Drive commands contain only `id` and a known `action`; no shell command, path, argument list, script body, branch, or commit SHA is accepted from Drive.
+FactoryBridge is the persistent local execution runtime used by ChatGPT as a controlled motor. The binary version remains `0.13.0`; the control protocol is independently versioned.
 
-See [`docs/factory-bridge-agent-runtime-v1.md`](../docs/factory-bridge-agent-runtime-v1.md) for the architecture and operating model.
+## Current architecture
+
+```text
+ChatGPT
+  ↕
+GitHub Issue #7 — FACTORY_BUS_V2
+  ↕
+FactoryBridge executor
+  ↕
+local Git / .NET / PostgreSQL / ProjectHub / tests
+```
+
+Normal execution no longer depends on Google Drive synchronization. Runtime state, journals, evidence, logs and staging live under `%LOCALAPPDATA%\FactoryBridge`. Human-testable ProjectHub builds live under `%USERPROFILE%\ProjectHub-Lab`.
+
+Google Drive `FACTORY_BRIDGE` is retained only for compact brain state, documentation and emergency bootstrap/recovery.
+
+Tailscale Funnel exposes a deliberately minimal read-only human dashboard. It is not the primary brain↔motor control path.
 
 ## Runtime roles
 
-- `supervisor`: launches and monitors exactly one executor, preserving the last abnormal executor exit in status.
-- `executor`: consumes `01_COMMANDS` and runs allowlisted actions.
-- `panel`: read-only observer; it never consumes commands or launches child processes.
+- `supervisor` — owns one executor lifecycle and the local gateway.
+- `executor` — polls the GitHub Runtime Bus and executes allowlisted missions.
+- `panel` — legacy read-only observer.
 
-## Supported actions
+A compatibility local mailbox still exists under `%LOCALAPPDATA%\FactoryBridge\mailbox`, but GitHub Issue #7 is the canonical control bus.
 
-### Runtime diagnostics
+## GitHub Runtime Bus V2
 
-- `bridge.ping`
-- `bridge.doctor`
-- `system.info`
+Repository: `Toctox/DISPATCHER`
 
-`bridge.doctor` checks Git, .NET, PowerShell, optional Go self-update capability, and configured Bridge/Dispatcher/ProjectHub directories.
+Issue: `#7 — FACTORY RUNTIME BUS`
 
-### ProjectHub — atomic actions
+Marker: `<!-- FACTORY_BUS_V2 -->`
 
-- `projecthub.status`
-- `projecthub.sync`
-- `projecthub.build`
-- `projecthub.test`
-- `projecthub.start`
-- `projecthub.stop`
-- `projecthub.logs`
-- `projecthub.validate`
+Trusted author: `Toctox`
 
-`projecthub.status` reports the local branch, `HEAD`, `origin/main`, dirty state, ahead/behind counts, application health, and whether the running server has Bridge-recorded commit provenance.
+Idle polling: approximately one request per minute with bounded exponential backoff on failures.
 
-`projecthub.sync` is fixed in code to:
+### Hardened mission envelope
 
-1. `git status --porcelain` and refuse a dirty checkout;
-2. refuse while ProjectHub is running;
-3. `git fetch origin main`;
-4. `git switch main`;
-5. `git merge --ff-only origin/main`;
-6. verify `branch=main`, clean checkout, and `HEAD == origin/main`.
-
-No branch or SHA can be supplied by Drive.
-
-`projecthub.build`, `projecthub.test`, and `projecthub.start` fail closed unless the checkout is canonical (`main`, clean, `HEAD == origin/main`). Results record `builtCommit`, `testedCommit`, or `startedCommit` respectively.
-
-`projecthub.start` records the managed PID and commit in `00_STATUS/projecthub-process.json`. If `127.0.0.1:5080/health` is already healthy but there is no matching Bridge-managed commit provenance, start fails instead of accepting an unknown process.
-
-`projecthub.stop` kills only the PID recorded in `00_STATUS/projecthub-process.json`. A healthy but untracked process is never killed automatically.
-
-`projecthub.logs` returns only bounded tails of the fixed Bridge-managed ProjectHub stdout/stderr logs.
-
-`projecthub.validate` owns a stopped-to-stopped validation lifecycle: canonical preflight, Release build, Release tests, managed start, health/provenance check, and managed stop. It refuses to run if ProjectHub is already active.
-
-### ProjectHub — high-level actions (v0.13)
-
-These actions reduce model/Drive round-trips while preserving the same allowlist boundary.
-
-- `projecthub.snapshot` — runs `bridge.doctor`, canonical `projecthub.status`, and bounded `projecthub.logs`, returning one consolidated evidence payload without mutating either checkout.
-- `projecthub.verify` — one canonical preflight followed by Release build and tests; it never starts the server. This is the preferred tight-loop action while iterating on implementation.
-- `projecthub.refresh_validate` — performs safe fast-forward `projecthub.sync` and then the complete stopped-to-stopped `projecthub.validate` pipeline. This is the preferred post-commit validation action.
-
-Typical autonomous worker cycle:
-
-```text
-projecthub.snapshot
-  -> decide/edit in GitHub
-  -> projecthub.refresh_validate
-  -> if failure: inspect consolidated evidence / projecthub.logs
-  -> correct and repeat
-```
-
-Fixed ProjectHub commands remain:
-
-- restore: `dotnet restore ProjectHub.slnx --locked-mode`
-- build: `dotnet build ProjectHub.slnx --configuration Release --no-restore`
-- test: `dotnet test ProjectHub.slnx --configuration Release --no-build --no-restore`
-- start: `dotnet run --project src/ProjectHub.Server --configuration Release --no-build --no-launch-profile --urls http://127.0.0.1:5080`
-
-### PostgreSQL local
-
-- `postgres.install`
-
-The PostgreSQL action remains explicitly allowlisted and keeps local credentials on the notebook; secrets are not returned through Drive results.
-
-### Existing bridge/dispatcher actions
-
-- `git.status`
-- `git.pull` (only when local `allowGitPull=true`)
-- `git.push` (only when local `allowGitPush=true`)
-- `dispatcher.test`
-- `dispatcher.tick`
-
-The legacy Dispatcher actions are kept for compatibility; ProjectHub delivery does not depend on reconstructing the old Project Factory orchestration.
-
-## Drive command boundary
-
-Valid command shape:
+A V2 mission is pinned to one ProjectHub commit and one validity window:
 
 ```json
 {
-  "id": "PROJECTHUB-REFRESH-VALIDATE-001",
-  "action": "projecthub.refresh_validate"
+  "protocol": "FACTORY_BUS_V2",
+  "type": "MISSION",
+  "id": "M-EXAMPLE-001",
+  "kind": "projecthub.verify",
+  "objective": "Verify the authorized ProjectHub commit",
+  "targetCommit": "6494e7b51aae694f4559f836199cb78212976edc",
+  "issuedAt": "2026-09-09T04:00:00Z",
+  "expiresAt": "2026-09-09T05:00:00Z",
+  "payloadHash": "<sha256 of canonical mission payload>"
 }
 ```
 
-Unknown fields are rejected by the JSON decoder.
+The canonical payload hash covers `id`, `kind`, `objective`, `targetCommit`, `issuedAt` and `expiresAt`. An expired, malformed, tampered or moved-target mission fails closed.
 
-## Execution evidence
+Historical `FACTORY_BUS_V1` comments can still be parsed for evidence compatibility, but V1 missions that do not already have local evidence are never newly executed after the V2 cutover.
 
-Every command writes `02_RESULTS/RESULT__<id>.json` containing structured evidence such as:
+### Allowlisted mission kinds
 
-- `status`
-- `stdout` / `stderr`
-- `exitCode`
-- `startedAt` / `finishedAt` / `durationMs`
-- fixed `logicalCommand`
-- action-specific metadata, including ProjectHub commit provenance where applicable.
+- `projecthub.verify`
+- `projecthub.showcase`
+- `projecthub.full_cycle`
 
-High-level actions additionally return ordered `meta.steps` and nested evidence for their component operations.
+No mission can contain a shell command, executable, arbitrary path, arbitrary URL, branch, argument list or script body.
 
-Existing RESULT IDs remain idempotent: an already-produced result prevents re-execution and the incoming command is archived.
+## Single scheduler and durable journal
 
-`00_STATUS` contains observational state only:
+Every mission execution passes through one process-wide execution mutex. GitHub, the authenticated local Gateway and the compatibility local inbox therefore cannot mutate the ProjectHub checkout concurrently.
 
-- `supervisor.json`
-- `executor.json`
-- `last_command.json`
-- `last_result.json`
-- `projecthub-process.json` when a Bridge-managed ProjectHub server is active.
+Before execution, FactoryBridge persists `%LOCALAPPDATA%\FactoryBridge\missions\<mission-id>\journal.json`.
 
-## Local config
+Journal states include:
+
+```text
+RECEIVED → QUEUED → ACKED → RUNNING → DONE / NEEDS_BRAIN / BLOCKED
+```
+
+The same mission ID with a different canonical payload is rejected. Reusing the same payload does not create a second reservation.
+
+If the runtime restarts while a journal is non-terminal, FactoryBridge does **not** blindly replay the mission. It records `NEEDS_BRAIN` and asks for an explicit retry with a new mission ID. This trades automatic replay for protection against duplicate side effects.
+
+## Independent poller and mission control
+
+GitHub polling is no longer blocked by a long mission. After a mission has been durably queued and acknowledged, execution runs independently while the poller continues checking Issue #7.
+
+V2 supports control messages for a known mission:
+
+```json
+{
+  "protocol": "FACTORY_BUS_V2",
+  "type": "CONTROL",
+  "id": "M-EXAMPLE-001",
+  "action": "PAUSE"
+}
+```
+
+Allowed controls:
+
+- `PAUSE`
+- `RESUME`
+- `CANCEL`
+
+Controls are observed between deterministic mission stages. A single external build/test process already in progress is not forcibly killed mid-instruction; control takes effect at the next safe stage boundary.
+
+## ProjectHub provenance
+
+ProjectHub operations continue to fail closed unless their canonical requirements are satisfied:
+
+- branch `main` where a canonical checkout is required;
+- clean working tree;
+- `HEAD == origin/main`;
+- managed process provenance for start/stop operations.
+
+V2 adds an authorization invariant: `origin/main` must still equal the mission's `targetCommit` immediately before execution. After `projecthub.full_cycle` sync, the canonical checkout is checked again against that target. If `main` moved between brain authorization and local execution, the mission stops instead of silently testing newer code.
+
+## Mission behavior
+
+`projecthub.verify` performs canonical Release build and tests without starting the server.
+
+`projecthub.showcase` publishes a human-testable build into `%USERPROFILE%\ProjectHub-Lab`.
+
+`projecthub.full_cycle` performs:
+
+```text
+safe sync
+→ target SHA re-check
+→ verify
+→ showcase publish
+→ local showcase smoke
+```
+
+Full logs, build products, traces and detailed evidence remain local. The GitHub bus receives compact ACK/CHECKPOINT messages only.
+
+## Gateway boundary
+
+Local bind address: `127.0.0.1:8787`.
+
+Public read-only endpoints exposed through the Tailscale Funnel:
+
+- `/public/health`
+- `/public/attention`
+- `/public/checkpoint`
+- `/public/showcase`
+
+Public checkpoint data is metadata-only. Mission objective, internal summary, decision question, execution steps and local filesystem paths are intentionally not exposed.
+
+Private endpoints still require the local bearer token:
+
+- `GET /api/runtime/status`
+- `POST /api/missions`
+
+The token remains local under `%LOCALAPPDATA%\FactoryBridge\gateway`.
+
+## Local state
+
+Primary paths:
+
+```text
+%LOCALAPPDATA%\FactoryBridge\
+  bin\
+  mailbox\
+  missions\
+  state\
+  gateway\
+  staging\
+  source\
+
+%USERPROFILE%\ProjectHub-Lab\
+```
+
+Local config:
 
 `%LOCALAPPDATA%\FactoryBridge\config.json`
 
-```json
-{
-  "bridgeRoot": "G:\\Meu Drive\\FACTORY_BRIDGE",
-  "dispatcherWorkDir": "C:\\Users\\natan\\OneDrive\\Desktop\\projetos\\FactoryDispatcher",
-  "projectHubWorkDir": "C:\\Users\\natan\\OneDrive\\Desktop\\projetos\\ProjectHub",
-  "allowGitPull": false,
-  "allowGitPush": false,
-  "commandTimeoutSec": 120,
-  "pollIntervalMs": 1000
-}
-```
+`bridgeRoot` should point to `%LOCALAPPDATA%\FactoryBridge\mailbox`, not Google Drive.
 
-`git.exe`, `dotnet.exe`, and `powershell.exe` must be available on `PATH` for the normal ProjectHub runtime. `go.exe` is required only for source-based FactoryBridge self-update.
+## Credentials
 
-## Self-update bootstrap
+The current runtime obtains the already-cached GitHub credential using `git credential fill` and keeps the returned token in memory. It is never written to Issue comments, Drive checkpoints or runtime evidence.
 
-After the DISPATCHER checkout is updated, create the fixed marker:
+A future dedicated fine-grained Issues-only credential remains preferable to a broad Git credential. Until that credential is provisioned, the protocol/allowlist and local runtime isolation are the principal execution boundaries.
 
-`<bridgeRoot>\00_STATUS\factory-bridge-update.request.json`
+## Recovery
 
-Then issue `dispatcher.tick`. The updated `scripts/run-tick.ps1` calls `scripts/factory-bridge-update.ps1`, which runs `go test ./...`, builds `FactoryBridge.next.exe`, and schedules replacement only after successful tests/build. The prior executable is retained as `FactoryBridge.prev.exe`.
+Fast recovery of an installed binary:
 
-## Run
+`RECOVER_FACTORY_BRIDGE.cmd`
 
-Supervisor:
+Clean source-based reinstall:
 
-```powershell
-.\FactoryBridge.exe --mode supervisor
-```
+`INSTALL_FACTORY_BRIDGE_CLEAN.cmd`
 
-Executor only:
+The clean installer fetches source, runs `go test ./...`, builds in local staging and promotes only after tests/build pass. A golden recovery pin is maintained separately so emergency recovery does not need to trust an arbitrary future `main`.
 
-```powershell
-.\FactoryBridge.exe --mode executor
-```
-
-Read-only panel:
-
-```powershell
-.\FactoryBridge.exe --mode panel
-```
-
-## Build on Windows
+## Verification before promotion
 
 ```powershell
 go test ./...
 go build -trimpath -ldflags "-s -w" -o FactoryBridge.exe .
 ```
+
+The runtime must not be promoted when either command fails.
+
+## Remaining hard boundary
+
+The allowlist is not an operating-system sandbox. `dotnet build` and `dotnet test` execute repository-controlled code with the Windows identity running FactoryBridge. The next major security boundary is therefore an isolated build/test identity or VM/WSL/container with restricted access to personal files and credentials.
