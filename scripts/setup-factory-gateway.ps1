@@ -110,9 +110,57 @@ if (-not (Test-Path -LiteralPath $urlPath)) {
     throw 'Gateway public URL file was not created.'
 }
 $url = (Get-Content -LiteralPath $urlPath -Raw).Trim()
+
+# Prove the full HTTPS route via Cloudflare, not merely localhost.
+$externalHealth = Invoke-RestMethod -Uri ($url + '/public/health') -Method Get -TimeoutSec 15
+if (-not $externalHealth.ok -or -not $externalHealth.executorOnline) {
+    throw 'External HTTPS health probe returned an unhealthy executor.'
+}
+$externalCheckpoint = Invoke-RestMethod -Uri ($url + '/public/checkpoint') -Method Get -TimeoutSec 15
+
+# Prove that the private boundary rejects requests without a bearer token.
+$privateUnauthorized = $false
+try {
+    Invoke-WebRequest -Uri ($url + '/api/runtime/status') -Method Get -UseBasicParsing -TimeoutSec 15 | Out-Null
+} catch {
+    $statusCode = $null
+    if ($_.Exception.Response) {
+        try { $statusCode = [int]$_.Exception.Response.StatusCode } catch { $statusCode = $null }
+    }
+    if ($statusCode -eq 401) {
+        $privateUnauthorized = $true
+    } else {
+        throw
+    }
+}
+if (-not $privateUnauthorized) {
+    throw 'Private gateway endpoint accepted an unauthenticated request.'
+}
+
+$config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+$bridgeRoot = [string]$config.bridgeRoot
+if (-not [string]::IsNullOrWhiteSpace($bridgeRoot)) {
+    $brainDir = Join-Path $bridgeRoot '00_BRAIN'
+    New-Item -ItemType Directory -Force -Path $brainDir | Out-Null
+    $probe = [ordered]@{
+        status = 'PASS'
+        url = $url
+        checkedAt = (Get-Date).ToUniversalTime().ToString('o')
+        healthOk = [bool]$externalHealth.ok
+        executorOnline = [bool]$externalHealth.executorOnline
+        checkpointState = [string]$externalCheckpoint.state
+        checkpointMissionId = [string]$externalCheckpoint.missionId
+        privateUnauthenticatedRejected = $privateUnauthorized
+    }
+    $probeJson = $probe | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText((Join-Path $brainDir 'GATEWAY_PROBE.json'), $probeJson + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+}
+
 Write-Host ''
 Write-Host 'FACTORY_GATEWAY_READY'
 Write-Host "URL=$url"
+Write-Host 'External probe: PASS'
+Write-Host 'Private unauthenticated boundary: 401 PASS'
 Write-Host 'Public endpoints:'
 Write-Host "  $url/public/health"
 Write-Host "  $url/public/attention"
