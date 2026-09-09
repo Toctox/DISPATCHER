@@ -194,6 +194,14 @@ func setMissionControl(id, action string) error {
 	default:
 		return fmt.Errorf("unsupported mission control action: %s", action)
 	}
+	journal, err := readMissionJournal(id)
+	if err != nil || journal == nil {
+		return errors.New("mission is not known locally")
+	}
+	switch strings.ToUpper(strings.TrimSpace(journal.State)) {
+	case "DONE", "NEEDS_BRAIN", "BLOCKED":
+		return fmt.Errorf("mission is already terminal: %s", strings.ToUpper(strings.TrimSpace(journal.State)))
+	}
 	if current := readMissionControl(id); current == "CANCEL" && action != "CANCEL" {
 		return errors.New("mission cancellation is terminal")
 	}
