@@ -59,7 +59,17 @@ func TestGatewayPrivateMissionRequiresBearerToken(t *testing.T) {
 	server := httptest.NewServer(gatewayMux(cfg, token))
 	defer server.Close()
 
-	payload := []byte(`{"id":"M-GW-1","kind":"projecthub.verify","objective":"gateway test"}`)
+	mission := hardenedTestMission(t, "M-GW-1")
+	mission.Objective = "gateway test"
+	hash, err := missionPayloadHash(mission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission.PayloadHash = hash
+	payload, err := json.Marshal(mission)
+	if err != nil {
+		t.Fatal(err)
+	}
 	resp, err := http.Post(server.URL+"/api/missions", "application/json", bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
