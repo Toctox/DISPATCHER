@@ -230,6 +230,27 @@ func waitForMissionPermission(id string) error {
 		case "CANCEL":
 			return errors.New("mission cancelled by control message")
 		case "PAUSE":
+			// executeMission marks the journal RUNNING only after acquiring the
+			// global scheduler. In that state a pause must release the scheduler,
+			// otherwise one paused mission blocks every other valid mission.
+			journal, err := readMissionJournal(id)
+			if err == nil && journal != nil && strings.EqualFold(strings.TrimSpace(journal.State), "RUNNING") {
+				missionExecutionMu.Unlock()
+				for {
+					switch readMissionControl(id) {
+					case "CANCEL":
+						missionExecutionMu.Lock()
+						return errors.New("mission cancelled by control message")
+					case "PAUSE":
+						time.Sleep(500 * time.Millisecond)
+						continue
+					default:
+						missionExecutionMu.Lock()
+					}
+					break
+				}
+				continue
+			}
 			time.Sleep(2 * time.Second)
 			continue
 		default:
