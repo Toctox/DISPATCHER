@@ -6,8 +6,9 @@ Status: **runtime v0.14.0 promoted and live-proven; core Runtime Bus healthy; ex
 
 - Repository: `Toctox/DISPATCHER`
 - Canonical bus: Issue #7
-- DISPATCHER main/runtime commit: `120359f4a620c6d163c06885a8802ea41eea186f`
+- Installed FactoryBridge runtime source commit: `120359f4a620c6d163c06885a8802ea41eea186f`
 - FactoryBridge version: `0.14.0`
+- Repository `main` may advance with documentation-only commits without changing the installed runtime binary; runtime identity is therefore tracked separately from repository-head identity.
 - ProjectHub authorized commit used by the latest full-cycle proofs: `6494e7b51aae694f4559f836199cb78212976edc`
 
 ## Fresh evidence
