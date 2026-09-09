@@ -11,26 +11,42 @@ import (
 
 func TestParseGitHubBusEnvelopeMission(t *testing.T) {
 	body := githubBusMarker + "\n```json\n" + `{
-  "protocol":"FACTORY_BUS_V1",
+  "protocol":"FACTORY_BUS_V2",
   "type":"MISSION",
   "id":"M-TEST-001",
   "kind":"projecthub.verify",
-  "objective":"Validate current main"
+  "objective":"Validate current main",
+  "targetCommit":"6494e7b51aae694f4559f836199cb78212976edc",
+  "issuedAt":"2026-09-09T03:00:00Z",
+  "expiresAt":"2026-09-09T04:00:00Z",
+  "payloadHash":"deadbeef"
 }` + "\n```"
 	env, err := parseGitHubBusEnvelope(body)
 	if err != nil {
 		t.Fatalf("parseGitHubBusEnvelope: %v", err)
 	}
-	if env.Type != "MISSION" || env.ID != "M-TEST-001" || env.Kind != "projecthub.verify" {
+	if env.Type != "MISSION" || env.ID != "M-TEST-001" || env.Kind != "projecthub.verify" || env.Protocol != githubBusProtocol {
 		t.Fatalf("unexpected envelope: %#v", env)
 	}
 }
 
 func TestParseGitHubBusEnvelopeRejectsUnknownField(t *testing.T) {
 	body := githubBusMarker + `
-{"protocol":"FACTORY_BUS_V1","type":"MISSION","id":"M-1","kind":"projecthub.verify","shell":"whoami"}`
+{"protocol":"FACTORY_BUS_V2","type":"MISSION","id":"M-1","kind":"projecthub.verify","shell":"whoami"}`
 	if _, err := parseGitHubBusEnvelope(body); err == nil {
 		t.Fatal("expected unknown field to be rejected")
+	}
+}
+
+func TestParseLegacyGitHubBusEnvelopeForHistoricalCompatibility(t *testing.T) {
+	body := githubBusLegacyMarker + `
+{"protocol":"FACTORY_BUS_V1","type":"CHECKPOINT","id":"M-OLD","state":"DONE"}`
+	env, err := parseGitHubBusEnvelope(body)
+	if err != nil {
+		t.Fatalf("legacy parse failed: %v", err)
+	}
+	if env.Protocol != githubBusLegacyProtocol || env.Type != "CHECKPOINT" {
+		t.Fatalf("unexpected legacy envelope: %#v", env)
 	}
 }
 
@@ -53,7 +69,7 @@ func TestGitHubBusHTTPReadAndWrite(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode([]githubIssueComment{{
 				ID:        101,
-				Body:      githubBusMarker + `\n{"protocol":"FACTORY_BUS_V1","type":"MISSION","id":"M-1","kind":"projecthub.verify"}`,
+				Body:      githubBusMarker + `\n{"protocol":"FACTORY_BUS_V2","type":"CHECKPOINT","id":"M-1","state":"DONE"}`,
 				CreatedAt: created,
 				User: struct {
 					Login string `json:"login"`
@@ -85,7 +101,7 @@ func TestGitHubBusHTTPReadAndWrite(t *testing.T) {
 	if err := postGitHubBusEnvelope("token", githubBusEnvelope{Type: "ACK", ID: "M-1"}); err != nil {
 		t.Fatalf("postGitHubBusEnvelope: %v", err)
 	}
-	if !strings.Contains(posted["body"], githubBusMarker) || !strings.Contains(posted["body"], `"type": "ACK"`) {
+	if !strings.Contains(posted["body"], githubBusMarker) || !strings.Contains(posted["body"], `"type": "ACK"`) || !strings.Contains(posted["body"], `"protocol": "FACTORY_BUS_V2"`) {
 		t.Fatalf("unexpected posted body: %q", posted["body"])
 	}
 }
