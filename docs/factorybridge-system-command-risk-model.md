@@ -1,6 +1,6 @@
 # FactoryBridge — system.command risk model
 
-Status: implementation for FACTORY_BUS_V2.
+Status: **deployed and live-proven for FACTORY_BUS_V2 on runtime commit `a0abdf1d1964bbfbe345d25cb5642ee087eeb077`.**
 
 ## Goal
 
@@ -101,10 +101,30 @@ Each command produces the standard FactoryBridge `Result` plus:
 - `riskApproved` or `requiresApproval` when applicable;
 - stdout, stderr, exit code and duration.
 
-The compact GitHub checkpoint does not publish the full command or full logs. Complete evidence remains local.
+The compact GitHub checkpoint may contain a compact summary, while complete evidence remains local. Sensitive or destructive operations must continue to rely on the local evidence record rather than treating the public Issue text as a full audit log.
+
+## Live proof — 2026-09-09
+
+Mission `M-SYSCMD-STANDARD-20260909-1652` was published through canonical Issue #7 with:
+
+- `kind`: `system.command`;
+- `targetCommit`: `a0abdf1d1964bbfbe345d25cb5642ee087eeb077`;
+- valid RFC3339 issue/expiry window;
+- canonical SHA-256 payload hash;
+- PowerShell diagnostic objective only.
+
+The runtime returned `ACK: ACCEPTED` and then `CHECKPOINT: DONE`. The compact result reported:
+
+- PowerShell `5.1.22621.4249`;
+- Git `2.55.0.windows.5`;
+- a live query result for scheduled task `FactoryBridge Admin Poller`.
+
+This proves that `system.command` is not merely present in repository source: the installed runtime accepted and executed the mission on the authorized FactoryBridge target commit.
+
+The live smoke proves the **standard** path. Guarded, approval and forbidden classes remain governed by the classifier and tests; do not describe those classes as live-proven unless separate canonical missions explicitly exercise their expected allow/block behavior.
 
 ## Operational consequence
 
-Once this FactoryBridge version is installed, common operational requests no longer require adding new Go mission kinds. ChatGPT can submit a hashed `system.command` mission and receive an ACK/CHECKPOINT through the same Issue #7 bus.
+Common diagnostic and operational requests no longer require adding a new Go mission kind for each PowerShell or CMD action. ChatGPT can submit a hashed `system.command` mission and receive ACK/CHECKPOINT through the same Issue #7 bus, subject to the risk classifier and fixed-shell boundary.
 
-The existing self-update path remains separate and elevated. The Admin Poller is changed to one-minute cadence, and `RUN_FACTORY_BRIDGE_ADMIN_POLLER_NOW.cmd` can start it immediately during bootstrap.
+The existing self-update path remains separate and elevated. The Admin Poller uses one-minute cadence, and `RUN_FACTORY_BRIDGE_ADMIN_POLLER_NOW.cmd` can start it immediately during bootstrap.
