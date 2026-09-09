@@ -18,12 +18,14 @@ import (
 )
 
 const (
-	githubBusProtocol      = "FACTORY_BUS_V1"
-	githubBusRepo          = "Toctox/DISPATCHER"
-	githubBusIssue         = 7
-	githubBusTrustedAuthor = "Toctox"
-	githubBusPollInterval  = 60 * time.Second
-	githubBusMarker        = "<!-- FACTORY_BUS_V1 -->"
+	githubBusProtocol       = "FACTORY_BUS_V2"
+	githubBusLegacyProtocol = "FACTORY_BUS_V1"
+	githubBusRepo           = "Toctox/DISPATCHER"
+	githubBusIssue          = 7
+	githubBusTrustedAuthor  = "Toctox"
+	githubBusPollInterval   = 60 * time.Second
+	githubBusMarker         = "<!-- FACTORY_BUS_V2 -->"
+	githubBusLegacyMarker   = "<!-- FACTORY_BUS_V1 -->"
 )
 
 var githubAPIBase = "https://api.github.com"
@@ -34,6 +36,11 @@ type githubBusEnvelope struct {
 	ID            string `json:"id"`
 	Kind          string `json:"kind,omitempty"`
 	Objective     string `json:"objective,omitempty"`
+	TargetCommit  string `json:"targetCommit,omitempty"`
+	IssuedAt      string `json:"issuedAt,omitempty"`
+	ExpiresAt     string `json:"expiresAt,omitempty"`
+	PayloadHash   string `json:"payloadHash,omitempty"`
+	Action        string `json:"action,omitempty"`
 	State         string `json:"state,omitempty"`
 	Summary       string `json:"summary,omitempty"`
 	Commit        string `json:"commit,omitempty"`
@@ -156,8 +163,11 @@ func githubBusRequest(token, method, endpoint string, body any) (*http.Response,
 	return client.Do(req)
 }
 
-func githubBusCommentsEndpoint(state githubBusState) string {
-	endpoint := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100", githubAPIBase, githubBusRepo, githubBusIssue)
+func githubBusCommentsEndpoint(state githubBusState, page int) string {
+	if page < 1 {
+		page = 1
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/issues/%d/comments?per_page=100&page=%d", githubAPIBase, githubBusRepo, githubBusIssue, page)
 	if strings.TrimSpace(state.LastSeenAt) != "" {
 		if parsed, err := time.Parse(time.RFC3339, state.LastSeenAt); err == nil {
 			since := parsed.Add(-time.Second).UTC().Format(time.RFC3339)
@@ -168,18 +178,27 @@ func githubBusCommentsEndpoint(state githubBusState) string {
 }
 
 func listGitHubBusComments(token string, state githubBusState) ([]githubIssueComment, error) {
-	resp, err := githubBusRequest(token, http.MethodGet, githubBusCommentsEndpoint(state), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return nil, fmt.Errorf("GitHub comments GET returned %d: %s", resp.StatusCode, compact(string(data), 500))
-	}
-	var comments []githubIssueComment
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&comments); err != nil {
-		return nil, err
+	comments := []githubIssueComment{}
+	for page := 1; page <= 20; page++ {
+		resp, err := githubBusRequest(token, http.MethodGet, githubBusCommentsEndpoint(state, page), nil)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			data, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("GitHub comments GET returned %d: %s", resp.StatusCode, compact(string(data), 500))
+		}
+		var pageComments []githubIssueComment
+		err = json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&pageComments)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		comments = append(comments, pageComments...)
+		if len(pageComments) < 100 {
+			break
+		}
 	}
 	sort.Slice(comments, func(i, j int) bool { return comments[i].ID < comments[j].ID })
 	return comments, nil
@@ -209,11 +228,16 @@ func postGitHubBusEnvelope(token string, envelope githubBusEnvelope) error {
 }
 
 func parseGitHubBusEnvelope(body string) (githubBusEnvelope, error) {
-	marker := strings.Index(body, githubBusMarker)
-	if marker < 0 {
+	marker := githubBusMarker
+	markerIndex := strings.Index(body, marker)
+	if markerIndex < 0 {
+		marker = githubBusLegacyMarker
+		markerIndex = strings.Index(body, marker)
+	}
+	if markerIndex < 0 {
 		return githubBusEnvelope{}, errors.New("Factory bus marker not found")
 	}
-	raw := strings.TrimSpace(body[marker+len(githubBusMarker):])
+	raw := strings.TrimSpace(body[markerIndex+len(marker):])
 	first := strings.Index(raw, "{")
 	last := strings.LastIndex(raw, "}")
 	if first < 0 || last < first {
@@ -225,8 +249,11 @@ func parseGitHubBusEnvelope(body string) (githubBusEnvelope, error) {
 	if err := dec.Decode(&envelope); err != nil {
 		return githubBusEnvelope{}, err
 	}
-	if envelope.Protocol != githubBusProtocol {
+	if envelope.Protocol != githubBusProtocol && envelope.Protocol != githubBusLegacyProtocol {
 		return githubBusEnvelope{}, errors.New("unsupported Factory bus protocol")
+	}
+	if envelope.Protocol == githubBusProtocol && marker != githubBusMarker {
+		return githubBusEnvelope{}, errors.New("V2 protocol requires V2 marker")
 	}
 	return envelope, nil
 }
@@ -261,6 +288,41 @@ func checkpointEnvelope(cp MissionCheckpoint) githubBusEnvelope {
 	}
 }
 
+func blockedEnvelope(mission Mission, summary string) githubBusEnvelope {
+	return checkpointEnvelope(MissionCheckpoint{
+		MissionID:     mission.ID,
+		Kind:          mission.Kind,
+		State:         "BLOCKED",
+		StartedAt:     time.Now().Format(time.RFC3339),
+		FinishedAt:    time.Now().Format(time.RFC3339),
+		Summary:       summary,
+		BridgeVersion: bridgeVersion,
+	})
+}
+
+func executeGitHubMission(cfg Config, token string, mission Mission) {
+	cp := executeMission(cfg, mission, osRunner{})
+	if err := postGitHubBusEnvelope(token, checkpointEnvelope(cp)); err != nil {
+		fmt.Fprintf(os.Stderr, "github bus checkpoint publish error mission=%s: %v\n", mission.ID, err)
+	}
+}
+
+func processGitHubControl(token string, envelope githubBusEnvelope) (bool, error) {
+	if envelope.Protocol != githubBusProtocol {
+		return true, nil
+	}
+	if !idPattern.MatchString(envelope.ID) {
+		return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, State: "BLOCKED", Summary: "invalid mission id", BridgeVersion: bridgeVersion})
+	}
+	if _, err := readMissionJournal(envelope.ID); err != nil {
+		return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, State: "BLOCKED", Summary: "mission is not known locally", BridgeVersion: bridgeVersion})
+	}
+	if err := setMissionControl(envelope.ID, envelope.Action); err != nil {
+		return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, State: "BLOCKED", Summary: err.Error(), BridgeVersion: bridgeVersion})
+	}
+	return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, State: strings.ToUpper(strings.TrimSpace(envelope.Action)), Summary: "Mission control state updated.", BridgeVersion: bridgeVersion})
+}
+
 func processGitHubBusComment(cfg Config, token string, comment githubIssueComment) (bool, error) {
 	if !strings.EqualFold(strings.TrimSpace(comment.User.Login), githubBusTrustedAuthor) {
 		return true, nil
@@ -269,51 +331,104 @@ func processGitHubBusComment(cfg Config, token string, comment githubIssueCommen
 	if err != nil {
 		return true, nil
 	}
-	if strings.ToUpper(strings.TrimSpace(envelope.Type)) != "MISSION" {
+	messageType := strings.ToUpper(strings.TrimSpace(envelope.Type))
+	if messageType == "CONTROL" {
+		return processGitHubControl(token, envelope)
+	}
+	if messageType != "MISSION" {
 		return true, nil
 	}
+
 	mission := Mission{
-		ID:        envelope.ID,
-		Kind:      envelope.Kind,
-		CreatedAt: comment.CreatedAt.Format(time.RFC3339),
-		Objective: envelope.Objective,
-	}
-	if err := validateMission(mission); err != nil {
-		blocked := MissionCheckpoint{
-			MissionID:     mission.ID,
-			Kind:          mission.Kind,
-			State:         "BLOCKED",
-			StartedAt:     time.Now().Format(time.RFC3339),
-			FinishedAt:    time.Now().Format(time.RFC3339),
-			Summary:       err.Error(),
-			BridgeVersion: bridgeVersion,
-		}
-		postErr := postGitHubBusEnvelope(token, checkpointEnvelope(blocked))
-		return postErr == nil, postErr
+		ID:           envelope.ID,
+		Kind:         envelope.Kind,
+		CreatedAt:    comment.CreatedAt.Format(time.RFC3339),
+		Objective:    envelope.Objective,
+		TargetCommit: envelope.TargetCommit,
+		IssuedAt:     envelope.IssuedAt,
+		ExpiresAt:    envelope.ExpiresAt,
+		PayloadHash:  envelope.PayloadHash,
 	}
 
+	if envelope.Protocol == githubBusLegacyProtocol {
+		if cp, ok := existingMissionCheckpoint(mission.ID); ok {
+			postErr := postGitHubBusEnvelope(token, checkpointEnvelope(*cp))
+			return postErr == nil, postErr
+		}
+		// Historical V1 commands are never newly executed after the V2 cutover.
+		return true, nil
+	}
+
+	if err := validateMissionIntegrity(mission); err != nil {
+		postErr := postGitHubBusEnvelope(token, blockedEnvelope(mission, err.Error()))
+		return postErr == nil, postErr
+	}
 	if cp, ok := existingMissionCheckpoint(mission.ID); ok {
 		postErr := postGitHubBusEnvelope(token, checkpointEnvelope(*cp))
 		return postErr == nil, postErr
 	}
-
+	journal, created, err := reserveMission(mission)
+	if err != nil {
+		postErr := postGitHubBusEnvelope(token, blockedEnvelope(mission, err.Error()))
+		return postErr == nil, postErr
+	}
+	if !created {
+		state := strings.ToUpper(strings.TrimSpace(journal.State))
+		ack := githubBusEnvelope{Type: "ACK", ID: mission.ID, Kind: mission.Kind, State: "ALREADY_RESERVED", Summary: "Mission payload is already reserved locally in state " + state + ".", BridgeVersion: bridgeVersion}
+		postErr := postGitHubBusEnvelope(token, ack)
+		return postErr == nil, postErr
+	}
+	_ = markMissionJournalState(mission.ID, "QUEUED")
 	ack := githubBusEnvelope{
 		Type:          "ACK",
 		ID:            mission.ID,
 		Kind:          mission.Kind,
 		State:         "ACCEPTED",
-		Summary:       "Mission accepted by the local FactoryBridge runtime.",
+		Summary:       "Mission accepted and durably queued by the local FactoryBridge runtime.",
 		BridgeVersion: bridgeVersion,
 	}
 	if err := postGitHubBusEnvelope(token, ack); err != nil {
 		return false, err
 	}
-
-	cp := executeMission(cfg, mission, osRunner{})
-	if err := postGitHubBusEnvelope(token, checkpointEnvelope(cp)); err != nil {
-		return false, err
-	}
+	_ = markMissionJournalState(mission.ID, "ACKED")
+	go executeGitHubMission(cfg, token, mission)
 	return true, nil
+}
+
+func recoverInterruptedGitHubMissions(token string) {
+	journals, err := interruptedMissionJournals()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "github bus interrupted mission scan error: %v\n", err)
+		return
+	}
+	for _, journal := range journals {
+		mission := journal.Mission
+		if cp, ok := existingMissionCheckpoint(mission.ID); ok {
+			_ = markMissionJournalState(mission.ID, cp.State)
+			if token != "" {
+				_ = postGitHubBusEnvelope(token, checkpointEnvelope(*cp))
+			}
+			continue
+		}
+		cp := MissionCheckpoint{
+			MissionID:        mission.ID,
+			Kind:             mission.Kind,
+			State:            "NEEDS_BRAIN",
+			StartedAt:        journal.UpdatedAt,
+			FinishedAt:       time.Now().Format(time.RFC3339),
+			Summary:          "Runtime restarted while the mission was non-terminal; FactoryBridge refused automatic replay to avoid duplicate side effects.",
+			DecisionQuestion: "Review the interruption and explicitly submit a new mission id if retry is desired.",
+			BridgeVersion:    bridgeVersion,
+		}
+		dir, dirErr := missionLocalDir(mission.ID)
+		if dirErr == nil {
+			_ = writeMissionEvidence(dir, missionEvidence{Mission: mission, Checkpoint: cp, Results: map[string]Result{}, Notes: []string{"Recovered fail-closed after runtime restart."}})
+		}
+		_ = markMissionJournalState(mission.ID, cp.State)
+		if token != "" {
+			_ = postGitHubBusEnvelope(token, checkpointEnvelope(cp))
+		}
+	}
 }
 
 func pollGitHubBusOnce(cfg Config) error {
@@ -330,8 +445,9 @@ func pollGitHubBusOnce(cfg Config) error {
 		if comment.ID <= state.LastCommentID {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(comment.User.Login), githubBusTrustedAuthor) && strings.Contains(comment.Body, githubBusMarker) && token == "" {
-			return errors.New("trusted Factory bus message is pending but GitHub write credential is unavailable")
+		trustedV2 := strings.EqualFold(strings.TrimSpace(comment.User.Login), githubBusTrustedAuthor) && strings.Contains(comment.Body, githubBusMarker)
+		if trustedV2 && token == "" {
+			return errors.New("trusted Factory bus V2 message is pending but GitHub write credential is unavailable")
 		}
 		processed, err := processGitHubBusComment(cfg, token, comment)
 		if err != nil || !processed {
@@ -341,7 +457,9 @@ func pollGitHubBusOnce(cfg Config) error {
 			return errors.New("Factory bus comment was not fully processed")
 		}
 		state.LastCommentID = comment.ID
-		state.LastSeenAt = comment.CreatedAt.UTC().Format(time.RFC3339)
+		if !comment.CreatedAt.IsZero() {
+			state.LastSeenAt = comment.CreatedAt.UTC().Format(time.RFC3339)
+		}
 		state.LastPollAt = time.Now().UTC().Format(time.RFC3339)
 		if err := writeGitHubBusState(state); err != nil {
 			return err
@@ -353,11 +471,20 @@ func pollGitHubBusOnce(cfg Config) error {
 
 func runGitHubBusService(cfg Config) {
 	time.Sleep(3 * time.Second)
+	_, token, _ := githubCredential(cfg)
+	recoverInterruptedGitHubMissions(token)
+	backoff := githubBusPollInterval
 	for {
 		if err := pollGitHubBusOnce(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "github bus poll error: %v\n", err)
+			backoff *= 2
+			if backoff > 5*time.Minute {
+				backoff = 5 * time.Minute
+			}
+		} else {
+			backoff = githubBusPollInterval
 		}
-		time.Sleep(githubBusPollInterval)
+		time.Sleep(backoff)
 	}
 }
 
