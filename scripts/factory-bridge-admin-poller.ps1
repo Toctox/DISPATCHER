@@ -128,7 +128,7 @@ function New-UpdateEnvelope($Approval, $Result) {
 }
 
 function Publish-UpdateEnvelope([string]$Token, $Envelope) {
-    $body = "<!-- FACTORY_BUS_V2 -->`n```json`n" + ($Envelope | ConvertTo-Json -Depth 8) + "`n```"
+    $body = '<!-- FACTORY_BUS_V2 -->' + [Environment]::NewLine + '```json' + [Environment]::NewLine + ($Envelope | ConvertTo-Json -Depth 8) + [Environment]::NewLine + '```'
     $uri = "$api/repos/$repo/issues/$issue/comments"
     Invoke-RestMethod -Method Post -Uri $uri -Headers (Get-Headers $Token) -ContentType 'application/json' -Body (@{body=$body} | ConvertTo-Json -Compress) -TimeoutSec 20 | Out-Null
 }
