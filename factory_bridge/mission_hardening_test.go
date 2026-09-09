@@ -25,6 +25,25 @@ func hardenedTestMission(t *testing.T, id string) Mission {
 	return m
 }
 
+func TestMissionPayloadHashKnownVector(t *testing.T) {
+	m := Mission{
+		ID:           "M-VECTOR-001",
+		Kind:         "projecthub.verify",
+		Objective:    "verify exact commit",
+		TargetCommit: "6494e7b51aae694f4559f836199cb78212976edc",
+		IssuedAt:     "2026-09-09T04:00:00Z",
+		ExpiresAt:    "2026-09-09T05:00:00Z",
+	}
+	got, err := missionPayloadHash(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "d0ccba7b22fa5cd70d386dfc64c5a36d9fd762b2a15b809dc7d1931108b2b348"
+	if got != want {
+		t.Fatalf("canonical hash changed got=%s want=%s", got, want)
+	}
+}
+
 func TestMissionIntegrityAcceptsCanonicalHardenedEnvelope(t *testing.T) {
 	m := hardenedTestMission(t, "M-HARDENED-001")
 	if err := validateMissionIntegrity(m); err != nil {
