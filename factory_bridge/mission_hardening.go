@@ -106,6 +106,11 @@ func validateMissionIntegrity(m Mission) error {
 	if !strings.EqualFold(strings.TrimSpace(m.PayloadHash), want) {
 		return errors.New("payloadHash does not match the canonical mission payload")
 	}
+	if existing, readErr := readMissionJournal(m.ID); readErr == nil && existing != nil {
+		if !strings.EqualFold(strings.TrimSpace(existing.PayloadHash), want) {
+			return errors.New("mission id was already reserved with a different payload")
+		}
+	}
 	return nil
 }
 
