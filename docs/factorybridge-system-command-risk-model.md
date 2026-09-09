@@ -1,40 +1,26 @@
 # FactoryBridge — system.command risk model
 
-Status: **deployed and live-proven for FACTORY_BUS_V2 on runtime commit `a0abdf1d1964bbfbe345d25cb5642ee087eeb077`.**
+Status: **deployed and live-proven for FACTORY_BUS_V2 on installed runtime v0.14.0, source commit `120359f4a620c6d163c06885a8802ea41eea186f`. Standard and guarded execution paths plus approval-without-approval and forbidden fail-closed paths have canonical live evidence in Issue #7.**
 
 ## Goal
 
 Allow ChatGPT to use the Windows notebook as a practical execution motor without requiring a new hard-coded action for every PowerShell or CMD operation.
 
-The command still travels through the canonical GitHub Issue #7 bus and therefore remains bound to:
-
-- trusted author `Toctox`;
-- `FACTORY_BUS_V2` marker and protocol;
-- unique mission ID;
-- exact installed FactoryBridge commit (`targetCommit`);
-- RFC3339 issue/expiry window;
-- SHA-256 canonical payload hash;
-- durable local mission journal, checkpoint and evidence.
+The command still travels through canonical GitHub Issue #7 and remains bound to trusted author, `FACTORY_BUS_V2`, unique mission ID, exact installed FactoryBridge commit, RFC3339 issue/expiry window, SHA-256 canonical payload hash and durable local mission evidence.
 
 ## Mission kind
 
 `system.command`
 
-For V2 compatibility, the structured command parameters are encoded as JSON inside `objective`. Because `objective` is already part of the canonical mission payload, every command byte is covered by `payloadHash`.
-
-Example objective value:
-
-```json
-{"shell":"powershell","command":"Start-ScheduledTask -TaskName 'FactoryBridge Admin Poller'","workingDir":"C:\\Users\\user","timeoutSec":120}
-```
+Structured command parameters are encoded as JSON inside `objective`. Because `objective` is part of the canonical mission payload, every command byte is covered by `payloadHash`.
 
 Accepted fields:
 
 - `shell`: `powershell` or `cmd`;
 - `command`: command text, maximum 16 KiB;
-- `workingDir`: optional; defaults to the configured Dispatcher work directory and then the user home directory;
+- `workingDir`: optional; defaults to configured Dispatcher work directory and then user home;
 - `timeoutSec`: optional, maximum 1800 seconds;
-- `riskApproval`: omitted normally; set to literal `approved` only for a deliberately approved destructive/sensitive command.
+- `riskApproval`: omitted normally; literal `approved` only for a deliberately approved approval-class operation.
 
 Unknown fields are rejected.
 
@@ -42,89 +28,51 @@ Unknown fields are rejected.
 
 ### standard — automatic
 
-Read-only and ordinary commands that do not match a state-changing or destructive rule. Examples: directory listing, environment inspection, logs, ports, process queries, Git status/diff/log, test commands and diagnostics.
+Read-only and ordinary commands that do not match a state-changing or destructive rule. Examples include directory listing, environment inspection, logs, ports, process queries, Git status/diff/log, tests and diagnostics.
+
+Live proof: `M-SYSCMD-STANDARD-20260909-1652` returned `ACK: ACCEPTED` and `CHECKPOINT: DONE`; it reported PowerShell `5.1.22621.4249`, Git `2.55.0.windows.5` and the live state of `FactoryBridge Admin Poller`.
 
 ### guarded — automatic + audited
 
-State-changing commands that are useful for normal development and operations. They run automatically but the classification is recorded in local evidence. Examples include:
+State-changing commands useful for normal development and operations. They run automatically and classification is recorded in evidence. Examples include file creation/copy/move/rename/overwrite, process or service start/stop, scheduled-task changes, ordinary Git mutations and common package install/update operations.
 
-- file creation, copy, move, rename and overwrite;
-- process/service start and stop;
-- scheduled task start/stop/register/update/enable/disable;
-- ordinary Git add/commit/merge/rebase/checkout/switch/pull/push/fetch;
-- common package install/update operations.
+Live proof: `M-VERSION-POLLER-20260909-1704` executed `Start-ScheduledTask -TaskName 'FactoryBridge Admin Poller'` and returned `CHECKPOINT: DONE` with `risk=guarded`.
 
 ### approval — explicit approval required
 
-These are not executed unless the objective contains `"riskApproval":"approved"`:
+Examples include file or directory deletion, destructive/force Git operations, registry/service/scheduled-task deletion, shutdown/restart, ACL changes, firewall/security configuration changes and global software uninstall.
 
-- file or directory deletion (`Remove-Item`, `del`, `rd`, `rmdir`, etc.);
-- destructive/force Git operations such as `reset --hard`, `clean`, force-push and branch `-D`;
-- registry deletion;
-- service deletion;
-- scheduled-task deletion;
-- shutdown/restart;
-- ACL/permission changes;
-- firewall or endpoint-security configuration changes;
-- global software uninstall.
+Without `"riskApproval":"approved"`, the runner is not invoked and the mission returns `BLOCKED`.
 
-A mission without approval returns `BLOCKED`; the runner is never invoked.
+Live fail-closed proof: `M-RISK-APPROVAL-BLOCK-20260909-1723` targeted a deliberately nonexistent temporary path with `Remove-Item` and omitted approval. Runtime v0.14.0 returned `CHECKPOINT: BLOCKED` in 53 ms with `command requires explicit riskApproval=approved: file or directory deletion requires explicit approval`.
+
+This proves the **no-approval block branch** end to end. It does not by itself prove execution of an approval-class command after explicit approval; that branch should be qualified only with a deliberately safe, reversible scenario if such proof becomes necessary.
 
 ### forbidden — never automatic
 
-`riskApproval` cannot override these rules:
+`riskApproval` cannot override forbidden patterns such as disk formatting/clearing, filesystem-root deletion, disabling core endpoint-security protections, credential/LSASS extraction or obfuscated/dynamically evaluated command payloads such as encoded PowerShell, Base64 execution or `Invoke-Expression`.
 
-- disk formatting, disk clearing or partition removal;
-- filesystem-root deletion;
-- disabling core endpoint-security protections or adding Defender exclusions;
-- credential/LSASS extraction patterns;
-- obfuscated/dynamically evaluated command payloads such as encoded PowerShell, Base64 execution or `Invoke-Expression`.
+Live fail-closed proof: `M-RISK-FORBIDDEN-BLOCK-20260909-1723` contained an encoded-command pattern. Runtime v0.14.0 returned `CHECKPOINT: BLOCKED` in 25 ms with `command blocked: obfuscated or dynamically evaluated command text is not accepted`.
 
 ## Execution boundary
 
-The runtime does not execute an arbitrary executable path from the mission. It chooses the executable itself:
+The runtime does not execute an arbitrary executable path supplied by a mission. It selects the executable:
 
 - `powershell` -> `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <command>`
 - `cmd` -> `cmd.exe /d /s /c <command>`
 
-The command string is therefore flexible while the shell executable remains fixed.
+The command string is flexible while the shell executable remains fixed.
 
 ## Evidence
 
-Each command produces the standard FactoryBridge `Result` plus:
-
-- `riskLevel`;
-- `riskRule`;
-- `riskReason`;
-- `shell`;
-- resolved `workingDir`;
-- `riskApproved` or `requiresApproval` when applicable;
-- stdout, stderr, exit code and duration.
-
-The compact GitHub checkpoint may contain a compact summary, while complete evidence remains local. Sensitive or destructive operations must continue to rely on the local evidence record rather than treating the public Issue text as a full audit log.
-
-## Live proof — 2026-09-09
-
-Mission `M-SYSCMD-STANDARD-20260909-1652` was published through canonical Issue #7 with:
-
-- `kind`: `system.command`;
-- `targetCommit`: `a0abdf1d1964bbfbe345d25cb5642ee087eeb077`;
-- valid RFC3339 issue/expiry window;
-- canonical SHA-256 payload hash;
-- PowerShell diagnostic objective only.
-
-The runtime returned `ACK: ACCEPTED` and then `CHECKPOINT: DONE`. The compact result reported:
-
-- PowerShell `5.1.22621.4249`;
-- Git `2.55.0.windows.5`;
-- a live query result for scheduled task `FactoryBridge Admin Poller`.
-
-This proves that `system.command` is not merely present in repository source: the installed runtime accepted and executed the mission on the authorized FactoryBridge target commit.
-
-The live smoke proves the **standard** path. Guarded, approval and forbidden classes remain governed by the classifier and tests; do not describe those classes as live-proven unless separate canonical missions explicitly exercise their expected allow/block behavior.
+Each command produces standard FactoryBridge result data plus risk level/rule/reason, shell, resolved working directory, approval flags when applicable, stdout, stderr, exit code and duration. GitHub receives a compact checkpoint; complete evidence remains local.
 
 ## Operational consequence
 
-Common diagnostic and operational requests no longer require adding a new Go mission kind for each PowerShell or CMD action. ChatGPT can submit a hashed `system.command` mission and receive ACK/CHECKPOINT through the same Issue #7 bus, subject to the risk classifier and fixed-shell boundary.
+Common diagnostic and operational requests no longer require a new Go mission kind. ChatGPT can submit a hashed `system.command` mission and receive ACK/CHECKPOINT through Issue #7 subject to the classifier and fixed-shell boundary.
 
-The existing self-update path remains separate and elevated. The Admin Poller uses one-minute cadence, and `RUN_FACTORY_BRIDGE_ADMIN_POLLER_NOW.cmd` can start it immediately during bootstrap.
+The self-update path remains separate and elevated. Admin polling/self-update authorization continues through `FACTORY_ADMIN_V1` and has independent `UPDATE_RESULT` evidence.
+
+## Remaining boundary
+
+The risk classifier is a policy layer, not an OS sandbox. Builds, tests and approved commands execute with the Windows identity running FactoryBridge. Isolation through a restricted account, WSL/container or VM remains the major security hardening step.
