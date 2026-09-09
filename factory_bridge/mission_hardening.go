@@ -271,11 +271,11 @@ func ensureMissionTargetCommit(cfg Config, mission Mission, r runner) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	if _, err := runProjectHubGit(ctx, r, workDir, "fetch", "origin", "main"); err != nil {
+	if err := fetchProjectHubOriginMainWithRetry(cfg, mission, r, workDir); err != nil {
 		return err
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	origin, err := runProjectHubGit(ctx, r, workDir, "rev-parse", "origin/main")
 	if err != nil {
 		return err
