@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const bridgeVersion = "0.13.0"
+const bridgeVersion = "0.14.0"
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
@@ -430,7 +430,7 @@ func selectedMode(args []string) (string, error) {
 		}
 	}
 	if mode != "executor" && mode != "supervisor" && mode != "panel" {
-		return "", errors.New("--mode must be executor, supervisor, or panel")
+		return "", fmt.Errorf("unsupported mode: %s", mode)
 	}
 	return mode, nil
 }
@@ -438,34 +438,35 @@ func selectedMode(args []string) (string, error) {
 func main() {
 	mode, err := selectedMode(os.Args[1:])
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "FactoryBridge:", err)
 		os.Exit(2)
 	}
 	cfgPath, err := configPath()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, "FactoryBridge:", err)
 		os.Exit(2)
 	}
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "config error: %v\n", err)
+		fmt.Fprintln(os.Stderr, "FactoryBridge:", err)
 		os.Exit(2)
 	}
+
 	switch mode {
-	case "panel":
-		if err := runPanel(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "panel error: %v\n", err)
-			os.Exit(2)
-		}
 	case "supervisor":
 		if err := runSupervisor(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "supervisor error: %v\n", err)
-			os.Exit(2)
+			fmt.Fprintln(os.Stderr, "FactoryBridge supervisor:", err)
+			os.Exit(1)
+		}
+	case "panel":
+		if err := runPanel(cfg); err != nil {
+			fmt.Fprintln(os.Stderr, "FactoryBridge panel:", err)
+			os.Exit(1)
 		}
 	default:
 		if err := runExecutor(cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "executor error: %v\n", err)
-			os.Exit(2)
+			fmt.Fprintln(os.Stderr, "FactoryBridge executor:", err)
+			os.Exit(1)
 		}
 	}
 }
