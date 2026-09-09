@@ -88,18 +88,20 @@ func TestGatewayPrivateMissionRequiresBearerToken(t *testing.T) {
 	}
 }
 
-func TestGatewayPublicCheckpointOmitsLocalPaths(t *testing.T) {
+func TestGatewayPublicCheckpointIsMetadataOnly(t *testing.T) {
 	cfg := gatewayTestEnv(t)
 	cp := MissionCheckpoint{
-		MissionID: "M-GW-2",
-		Kind: "projecthub.full_cycle",
-		State: "NEEDS_BRAIN",
-		StartedAt: time.Now().Add(-time.Minute).Format(time.RFC3339),
-		Summary: "decision required",
-		DecisionQuestion: "Choose next step",
+		MissionID:         "M-GW-2",
+		Kind:              "projecthub.full_cycle",
+		State:             "NEEDS_BRAIN",
+		StartedAt:         time.Now().Add(-time.Minute).Format(time.RFC3339),
+		Objective:         "sensitive objective",
+		Summary:           "decision required with internal details",
+		DecisionQuestion:  "Choose next step",
 		LocalEvidencePath: `C:\private\evidence`,
-		ShowcasePath: `C:\private\showcase`,
-		BridgeVersion: bridgeVersion,
+		ShowcasePath:      `C:\private\showcase`,
+		Steps:             []MissionStepEvidence{{Name: "secret-step", Output: "internal output"}},
+		BridgeVersion:     bridgeVersion,
 	}
 	if err := writeJSONAtomic(filepath.Join(cfg.BridgeRoot, brainDirName, "CURRENT_STATE.json"), cp); err != nil {
 		t.Fatal(err)
@@ -116,10 +118,12 @@ func TestGatewayPublicCheckpointOmitsLocalPaths(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := body["localEvidencePath"]; ok {
-		t.Fatal("public checkpoint leaked localEvidencePath")
+	for _, forbidden := range []string{"localEvidencePath", "showcasePath", "objective", "summary", "decisionQuestion", "steps"} {
+		if _, ok := body[forbidden]; ok {
+			t.Fatalf("public checkpoint leaked %s", forbidden)
+		}
 	}
-	if _, ok := body["showcasePath"]; ok {
-		t.Fatal("public checkpoint leaked showcasePath")
+	if body["missionId"] != "M-GW-2" || body["state"] != "NEEDS_BRAIN" {
+		t.Fatalf("public metadata missing: %+v", body)
 	}
 }
