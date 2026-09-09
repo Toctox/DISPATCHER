@@ -1,143 +1,161 @@
 # FactoryBridge — GitHub Runtime Bus
 
-Status: **PRIMARY / migration complete / post-migration proof passed**
+Status: **V1 proven in production-like local use; V2 hardening staged on `main`, local promotion pending clean installer test**
 
 ## Objective
 
-Use GitHub only as a low-volume mailbox between ChatGPT (brain) and the persistent local FactoryBridge Mission Runtime (motor).
-
-Heavy computation and artifacts remain local. GitHub Actions are not part of this path.
+Use GitHub as a low-volume, structured control mailbox between ChatGPT (brain) and the persistent local FactoryBridge Mission Runtime (motor). Heavy computation and artifacts remain local. GitHub Actions are not required for this path.
 
 ## Canonical bus
 
-Repository: `Toctox/DISPATCHER`
+- Repository: `Toctox/DISPATCHER`
+- Issue: `#7 — FACTORY RUNTIME BUS — canonical brain↔motor mailbox`
+- V2 marker: `<!-- FACTORY_BUS_V2 -->`
+- Trusted command author: `Toctox`
+- Idle poll interval: 60 seconds, with bounded exponential backoff after failures
 
-Issue: `#7 — FACTORY RUNTIME BUS — canonical brain↔motor mailbox`
+## Why V2 exists
 
-Protocol marker: `<!-- FACTORY_BUS_V1 -->`
+The original V1 proved transport and execution, but an audit identified four foundation risks that had to be addressed before expanding autonomy:
 
-Trusted command author: `Toctox`
+1. a long mission blocked the GitHub poller;
+2. GitHub/Gateway/local inbox execution paths could race on one ProjectHub checkout;
+3. a crash after ACK could cause ambiguous replay behavior;
+4. a mission was not cryptographically bound to the exact ProjectHub commit authorized by the brain.
 
-Poll interval: 60 seconds while the executor is online.
+V2 directly addresses these four risks.
 
-## Message model
-
-### MISSION
+## V2 mission envelope
 
 ```json
 {
-  "protocol": "FACTORY_BUS_V1",
+  "protocol": "FACTORY_BUS_V2",
   "type": "MISSION",
   "id": "M-...",
   "kind": "projecthub.verify",
-  "objective": "..."
+  "objective": "...",
+  "targetCommit": "<full 40-character ProjectHub SHA>",
+  "issuedAt": "<RFC3339>",
+  "expiresAt": "<RFC3339>",
+  "payloadHash": "<sha256>"
 }
 ```
 
-Accepted kinds remain strictly allowlisted:
+`payloadHash` is SHA-256 over the canonical JSON projection containing `id`, `kind`, `objective`, `targetCommit`, `issuedAt` and `expiresAt`.
+
+A mission fails closed when:
+
+- the ID is invalid;
+- the kind is not allowlisted;
+- target SHA is malformed;
+- timestamps are malformed or expired;
+- the payload hash does not match;
+- `origin/main` no longer equals the authorized target commit;
+- a canonical checkout no longer equals the authorized target after sync;
+- the same mission ID was already reserved with a different payload.
+
+Accepted mission kinds remain strictly allowlisted:
 
 - `projecthub.verify`
 - `projecthub.showcase`
 - `projecthub.full_cycle`
 
-Unknown JSON fields are rejected. No arbitrary shell, local path, URL, executable, argument list or secret is accepted from the bus.
+No arbitrary shell, executable, path, URL, branch, script body or argument list is accepted from the bus.
 
-### ACK
+## Durable journal
 
-The motor posts a compact ACK before computation begins.
+Each mission is reserved locally before ACK:
 
-### CHECKPOINT
+`%LOCALAPPDATA%\FactoryBridge\missions\<mission-id>\journal.json`
 
-The motor posts only compact state:
+State model:
 
-- mission id/kind;
-- DONE, BLOCKED or NEEDS_BRAIN;
-- summary;
-- validated commit;
-- duration;
-- FactoryBridge version.
+```text
+RECEIVED → QUEUED → ACKED → RUNNING → DONE / NEEDS_BRAIN / BLOCKED
+```
 
-Full logs, builds, traces, retries and test evidence remain under `%LOCALAPPDATA%\FactoryBridge` and `%USERPROFILE%\ProjectHub-Lab`.
+The journal stores the canonical payload hash. Same ID + different payload is rejected.
 
-## Authentication
+If FactoryBridge restarts with a non-terminal journal and no terminal evidence, it does not automatically replay the operation. It records `NEEDS_BRAIN` and asks for an explicit retry with a new mission ID. This is a deliberate fail-closed choice against duplicate side effects.
 
-The local runtime obtains the already-cached GitHub credential through the standard Git credential helper (`git credential fill`). The token is used in memory for GitHub REST calls and is never written to Drive, logs, checkpoints or issue comments.
+## Single scheduler
 
-If no write credential is available, the runtime refuses to consume a trusted mission message rather than executing without being able to acknowledge/result it.
+All mission execution enters one process-wide execution mutex. The GitHub bus, authenticated Gateway and compatibility local inbox can queue work independently, but only one mission can mutate/test the canonical ProjectHub checkout at a time.
 
-## Rate-budget design
+This is the first scheduler boundary. Future worktree/container isolation may permit safe parallel read-only or isolated jobs without weakening this invariant.
 
-The bus intentionally polls at one request per minute: approximately 60 GET requests/hour while idle, plus only a few writes per mission. This is orders of magnitude below the normal authenticated REST budget and avoids commits-as-heartbeats.
+## Independent polling and controls
 
-No GitHub Actions minutes are consumed by local builds/tests.
+After durable reservation and ACK, mission execution runs in a separate goroutine. The GitHub poller remains available during long-running work.
 
-## Idempotency
+V2 control message:
 
-The runtime keeps its cursor in `%LOCALAPPDATA%\FactoryBridge\state\github-bus.json`.
+```json
+{
+  "protocol": "FACTORY_BUS_V2",
+  "type": "CONTROL",
+  "id": "M-...",
+  "action": "PAUSE"
+}
+```
 
-Before re-running a mission after a transient GitHub write failure/restart, it checks local mission evidence. A completed local mission can therefore re-publish its checkpoint without repeating the expensive computation.
+Allowed controls:
 
-## Network and storage roles
+- `PAUSE`
+- `RESUME`
+- `CANCEL`
 
-- **GitHub Issue #7** — canonical brain↔motor control mailbox.
-- **Tailscale Funnel** — human-facing dashboard/showcase access.
-- **`%LOCALAPPDATA%\FactoryBridge\mailbox`** — local runtime mailbox/status compatibility root.
-- **`%LOCALAPPDATA%\FactoryBridge`** — state, evidence, staging and runtime data.
-- **`%USERPROFILE%\ProjectHub-Lab`** — human-testable ProjectHub showcase builds.
-- **Google Drive `FACTORY_BRIDGE`** — canonical docs, compact brain state and emergency bootstrap/recovery only. It is no longer an execution queue, result store, watchdog or log store.
+Controls are applied at deterministic stage boundaries. FactoryBridge does not kill an already-running external build/test subprocess just to satisfy a control message; it stops or pauses at the next safe boundary.
 
-## Proven rollout
+## Pagination and backoff
 
-The rollout gate passed on 2026-09-09.
+The V2 poller paginates issue comments in pages of 100 and can consume multiple pages in one poll. This removes the single-page blind spot present in the first implementation. Poll failures increase the next delay up to five minutes; a successful poll resets it to 60 seconds.
 
-### Proof 1 — verify before detachment
+## Historical V1 behavior
 
-`M-BUS-SMOKE-20260909-001`
+V1 remains important evidence of the migration:
 
-- ChatGPT posted MISSION to Issue #7.
-- Local FactoryBridge returned ACK.
-- `projecthub.verify` executed locally.
-- CHECKPOINT returned `DONE`.
-- validated ProjectHub commit: `6494e7b51aae694f4559f836199cb78212976edc`.
-- local execution duration: 30,440 ms.
+- `M-BUS-SMOKE-20260909-001` — verify passed, 30,440 ms.
+- `M-BUS-FULL-20260909-001` — full cycle passed, 34,043 ms.
+- `M-BUS-POSTMIGRATE-20260909-001` — full cycle passed after Drive detachment, 26,176 ms.
+- `M-FOUNDATION-AUDIT-20260909-0050` — fresh audit verify passed, 18,207 ms.
 
-### Proof 2 — full cycle before detachment
+All validated ProjectHub commit `6494e7b51aae694f4559f836199cb78212976edc`.
 
-`M-BUS-FULL-20260909-001`
+After V2 cutover, historical V1 messages may be parsed for evidence compatibility, but an old V1 mission without existing local terminal evidence is never newly executed.
 
-- MISSION/ACK traveled through Issue #7.
-- local cycle completed sync → verify → showcase publish → local smoke.
-- CHECKPOINT returned `DONE`.
-- validated ProjectHub commit: `6494e7b51aae694f4559f836199cb78212976edc`.
-- local execution duration: 34,043 ms.
+## Public Gateway minimization
 
-### Proof 3 — full cycle after Drive detachment
+Public Tailscale endpoints remain read-only. V2 hardening removes mission objective, internal summary, decision question, step output and local filesystem paths from public checkpoint data. Public attention only reports whether attention is required plus mission ID/state metadata.
 
-`M-BUS-POSTMIGRATE-20260909-001`
+The private Gateway remains bearer-protected.
 
-This is the decisive migration proof. At this point the legacy Drive operational directories had already been removed and `bridgeRoot` had been relocated to the local mailbox.
+## Current network/storage roles
 
-- ChatGPT posted MISSION through Issue #7 only.
-- local FactoryBridge returned ACK.
-- local cycle completed sync → verify → showcase publish → local smoke.
-- CHECKPOINT returned `DONE`.
-- validated ProjectHub commit: `6494e7b51aae694f4559f836199cb78212976edc`.
-- local execution duration: 26,176 ms.
+- GitHub Issue #7 — canonical control mailbox.
+- `%LOCALAPPDATA%\FactoryBridge` — journal, missions, state, evidence, logs, source and staging.
+- `%LOCALAPPDATA%\FactoryBridge\mailbox` — local compatibility mailbox/status root.
+- `%USERPROFILE%\ProjectHub-Lab` — human-testable immutable builds.
+- Tailscale Funnel — human-facing read-only dashboard/showcase.
+- Google Drive `FACTORY_BRIDGE` — compact brain state, documentation and emergency bootstrap/recovery only.
 
-Therefore normal brain↔motor execution no longer depends on Google Drive synchronization.
+## Security boundary still open
 
-## Drive detachment
+The protocol allowlist is not an OS sandbox. `dotnet build` and `dotnet test` execute repository-controlled code with the Windows identity running FactoryBridge. The next major hardening boundary is an isolated runner identity/VM/WSL/container with restricted access to personal files and credentials.
 
-The runtime configuration was migrated from the synchronized Google Drive root to:
+A dedicated fine-grained GitHub credential restricted to the Runtime Bus is also preferable to reusing a broader cached Git credential. The code never writes the credential to the bus or evidence, but credential scope remains an account-side configuration concern.
 
-`%LOCALAPPDATA%\FactoryBridge\mailbox`
+## Promotion gate for V2
 
-The legacy Drive operational directories (`00_STATUS`, `01_COMMANDS`, `01_INBOX`, `02_OUTBOX`, `02_RESULTS`, `03_ARCHIVE`) and old executable/build/log artifacts were removed after the new local root was activated.
+Do not call V2 locally deployed until all of the following pass on the notebook:
 
-The Drive keeps only compact brain/documentation material plus explicit recovery/bootstrap files. The obsolete Cloudflare quick-tunnel URL and redundant legacy v0.13 recovery launcher were also removed after the stable Tailscale path and canonical recovery script were confirmed.
+1. `go test ./...`;
+2. `go build`;
+3. clean installer promotion;
+4. supervisor/executor heartbeat healthy;
+5. one V2 `projecthub.verify` mission with an exact `targetCommit` and valid payload hash;
+6. ACK arrives while the poller remains responsive;
+7. CHECKPOINT returns `DONE` for the authorized commit;
+8. public Gateway probe confirms minimized payload and private endpoint still returns 401 without bearer.
 
-## Recovery
-
-If the GitHub bus becomes unavailable, recover the local runtime with `RECOVER_FACTORY_BRIDGE.cmd` or reinstall from `INSTALL_FACTORY_BRIDGE_CLEAN.cmd`. Re-enabling the old Drive execution queue is an emergency migration/recovery operation, not the normal operating mode.
-
-The runtime still identifies as FactoryBridge `0.13.0`; this migration does not claim a semantic version bump.
+Until this gate passes, V1 remains the currently installed runtime behavior even though V2 source is present on repository `main`.
