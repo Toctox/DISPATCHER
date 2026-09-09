@@ -5,6 +5,7 @@ title FactoryBridge - Clean Local Installer
 set "TASK_NAME=FactoryBridge Supervisor"
 set "ROOT=%LOCALAPPDATA%\FactoryBridge"
 set "BIN_DIR=%ROOT%\bin"
+set "MAILBOX_DIR=%ROOT%\mailbox"
 set "STAGING_DIR=%ROOT%\staging"
 set "SOURCE_PARENT=%ROOT%\source"
 set "SOURCE_DIR=%SOURCE_PARENT%\DISPATCHER"
@@ -17,6 +18,7 @@ set "REPO=https://github.com/Toctox/DISPATCHER.git"
 echo ============================================================
 echo  FactoryBridge - CLEAN LOCAL INSTALL
 echo  Runtime: %%LOCALAPPDATA%%\FactoryBridge
+echo  Bus:     GitHub Issue #7 / FACTORY_BUS_V2
 echo  Source:  Toctox/DISPATCHER@main
 echo ============================================================
 echo.
@@ -37,12 +39,14 @@ if not exist "%CFG%" (
   echo ERROR: configuracao existente nao encontrada:
   echo   %CFG%
   echo.
-  echo Este instalador preserva a configuracao local existente e nao
-  echo inventa bridgeRoot, caminhos ou permissoes.
+  echo Este instalador preserva caminhos de Dispatcher/ProjectHub existentes
+  echo e nao inventa credenciais.
   goto :fail
 )
 
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
+if errorlevel 1 goto :mkdir_fail
+if not exist "%MAILBOX_DIR%" mkdir "%MAILBOX_DIR%"
 if errorlevel 1 goto :mkdir_fail
 if not exist "%STAGING_DIR%" mkdir "%STAGING_DIR%"
 if errorlevel 1 goto :mkdir_fail
@@ -108,9 +112,9 @@ if errorlevel 1 (
   goto :fail
 )
 
-echo [6/8] Normalizando configuracao local...
+echo [6/8] Normalizando configuracao local e reduzindo superficie legada...
 powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop'; $p='%CFG%'; $c=Get-Content -LiteralPath $p -Raw | ConvertFrom-Json; $c | Add-Member -NotePropertyName allowGitPull -NotePropertyValue $true -Force; $c | Add-Member -NotePropertyName allowGitPush -NotePropertyValue $true -Force; $json=$c | ConvertTo-Json -Depth 20; [System.IO.File]::WriteAllText($p,$json,(New-Object System.Text.UTF8Encoding($false)))"
+  "$ErrorActionPreference='Stop'; $p='%CFG%'; $c=Get-Content -LiteralPath $p -Raw | ConvertFrom-Json; $c | Add-Member -NotePropertyName bridgeRoot -NotePropertyValue '%MAILBOX_DIR%' -Force; $c | Add-Member -NotePropertyName allowGitPull -NotePropertyValue $false -Force; $c | Add-Member -NotePropertyName allowGitPush -NotePropertyValue $false -Force; $json=$c | ConvertTo-Json -Depth 20; [System.IO.File]::WriteAllText($p,$json,(New-Object System.Text.UTF8Encoding($false)))"
 if errorlevel 1 (
   echo ERROR: falha ao atualizar a configuracao local.
   goto :fail
@@ -143,18 +147,17 @@ echo  INSTALACAO CONCLUIDA
 echo ============================================================
 echo Runtime:
 echo   %INSTALL_EXE%
-echo.
 echo Config:
 echo   %CFG%
-echo.
 echo Source commit:
 echo   %SOURCE_HEAD%
-echo.
 echo Task:
 echo   %TASK_NAME%
 echo.
-echo O Google Drive permanece como transporte de COMMANDS/RESULTS/status;
-echo build, staging e runtime ficam no disco local.
+echo Controle primario: GitHub Issue #7 / FACTORY_BUS_V2
+echo Estado/evidencia: %%LOCALAPPDATA%%\FactoryBridge
+echo Google Drive: documentacao e recovery somente.
+echo Acoes legadas git.pull/git.push permanecem desabilitadas na config.
 echo.
 echo Pode fechar esta janela e voltar ao ChatGPT.
 echo.
@@ -181,6 +184,7 @@ goto :fail
 echo.
 echo INSTALACAO NAO CONCLUIDA.
 echo Nenhuma falha de teste/build promove intencionalmente um binario novo.
+echo Para recovery do runtime V1 conhecido, use RECOVER_FACTORY_BRIDGE_GOLDEN.cmd.
 echo.
 pause
 exit /b 1
