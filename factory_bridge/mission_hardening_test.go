@@ -45,6 +45,7 @@ func TestMissionPayloadHashKnownVector(t *testing.T) {
 }
 
 func TestMissionIntegrityAcceptsCanonicalHardenedEnvelope(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	m := hardenedTestMission(t, "M-HARDENED-001")
 	if err := validateMissionIntegrity(m); err != nil {
 		t.Fatalf("valid hardened mission rejected: %v", err)
@@ -52,6 +53,7 @@ func TestMissionIntegrityAcceptsCanonicalHardenedEnvelope(t *testing.T) {
 }
 
 func TestMissionIntegrityRejectsTamperedPayload(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	m := hardenedTestMission(t, "M-HARDENED-002")
 	m.Objective = "tampered after hash"
 	if err := validateMissionIntegrity(m); err == nil || !strings.Contains(err.Error(), "payloadHash") {
@@ -60,6 +62,7 @@ func TestMissionIntegrityRejectsTamperedPayload(t *testing.T) {
 }
 
 func TestMissionIntegrityRejectsExpiredMission(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	now := time.Now().UTC()
 	m := Mission{
 		ID:           "M-HARDENED-003",
@@ -94,6 +97,33 @@ func TestMissionReservationRejectsSameIDDifferentPayload(t *testing.T) {
 	second.PayloadHash = hash
 	if _, _, err := reserveMission(second); err == nil || !strings.Contains(err.Error(), "different payload") {
 		t.Fatalf("expected same-id payload conflict, got %v", err)
+	}
+}
+
+func TestMissionIntegrityRejectsSameIDNewPayloadAfterTerminalReservation(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	first := hardenedTestMission(t, "M-REPLAY-TERMINAL-001")
+	if err := validateMissionIntegrity(first); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := reserveMission(first); err != nil || !created {
+		t.Fatalf("first reservation failed created=%t err=%v", created, err)
+	}
+	if err := markMissionJournalState(first.ID, "DONE"); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.Objective = "different payload after terminal completion"
+	hash, err := missionPayloadHash(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.PayloadHash = hash
+	if err := validateMissionIntegrity(second); err == nil || !strings.Contains(err.Error(), "different payload") {
+		t.Fatalf("expected terminal same-id payload conflict, got %v", err)
+	}
+	if err := validateMissionIntegrity(first); err != nil {
+		t.Fatalf("identical terminal replay should remain valid/idempotent: %v", err)
 	}
 }
 
