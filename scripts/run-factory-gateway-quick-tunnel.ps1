@@ -1,4 +1,5 @@
 param(
+    [string]$CloudflaredPath = '',
     [int]$WaitSeconds = 45
 )
 
@@ -25,22 +26,47 @@ if ([string]::IsNullOrWhiteSpace($bridgeRoot)) {
 $brainDir = Join-Path $bridgeRoot '00_BRAIN'
 New-Item -ItemType Directory -Force -Path $brainDir | Out-Null
 
+function Refresh-ProcessPath {
+    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $env:Path = @($machine, $user) -join ';'
+}
+
 function Find-Cloudflared {
+    param([string]$Preferred = '')
+
+    if (-not [string]::IsNullOrWhiteSpace($Preferred) -and (Test-Path -LiteralPath $Preferred)) {
+        return (Resolve-Path -LiteralPath $Preferred).Path
+    }
+
+    Refresh-ProcessPath
     $cmd = Get-Command cloudflared.exe -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    $candidates = @(
+    if ($cmd -and (Test-Path -LiteralPath $cmd.Source)) { return $cmd.Source }
+
+    $directCandidates = @(
         (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links\cloudflared.exe'),
         (Join-Path $env:ProgramFiles 'cloudflared\cloudflared.exe'),
-        (Join-Path ${env:ProgramFiles(x86)} 'cloudflared\cloudflared.exe')
+        (Join-Path $env:ProgramFiles 'Cloudflare\cloudflared.exe'),
+        $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'cloudflared\cloudflared.exe' })
     ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
-    if ($candidates.Count -gt 0) { return $candidates[0] }
+    if ($directCandidates.Count -gt 0) { return (Resolve-Path -LiteralPath $directCandidates[0]).Path }
+
+    $packagesRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if (Test-Path -LiteralPath $packagesRoot) {
+        $packageExe = Get-ChildItem -LiteralPath $packagesRoot -Filter 'cloudflared.exe' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'Cloudflare\.cloudflared' } |
+            Select-Object -First 1
+        if ($packageExe) { return $packageExe.FullName }
+    }
+
     return $null
 }
 
-$cloudflared = Find-Cloudflared
+$cloudflared = Find-Cloudflared -Preferred $CloudflaredPath
 if (-not $cloudflared) {
     throw 'cloudflared.exe not found. Run SETUP_FACTORY_GATEWAY.cmd first.'
 }
+Write-Host "cloudflared=$cloudflared"
 
 # If our previously launched tunnel is still alive, just republish its URL.
 if (Test-Path -LiteralPath $pidPath) {
