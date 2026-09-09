@@ -1,6 +1,6 @@
 # FactoryBridge — GitHub Runtime Bus
 
-Status: **V1 proven in production-like local use; V2 hardening staged on `main`, local promotion pending clean installer test**
+Status: **FACTORY_BUS_V2 deployed and proven on the notebook at DISPATCHER commit `a0abdf1d1964bbfbe345d25cb5642ee087eeb077`; core bus, controls, scheduler-yield, network recovery and `system.command` execution have live evidence in Issue #7. Public Gateway minimization/private-auth should still be rechecked independently before treating every historical promotion-gate item as freshly closed.**
 
 ## Objective
 
@@ -34,7 +34,7 @@ V2 directly addresses these four risks.
   "id": "M-...",
   "kind": "projecthub.verify",
   "objective": "...",
-  "targetCommit": "<full 40-character ProjectHub SHA>",
+  "targetCommit": "<full 40-character authorized SHA>",
   "issuedAt": "<RFC3339>",
   "expiresAt": "<RFC3339>",
   "payloadHash": "<sha256>"
@@ -50,17 +50,18 @@ A mission fails closed when:
 - target SHA is malformed;
 - timestamps are malformed or expired;
 - the payload hash does not match;
-- `origin/main` no longer equals the authorized target commit;
-- a canonical checkout no longer equals the authorized target after sync;
+- the authorized target no longer matches the runtime-specific commit invariant;
+- a canonical checkout no longer equals the authorized target after sync when the mission kind requires ProjectHub checkout validation;
 - the same mission ID was already reserved with a different payload.
 
-Accepted mission kinds remain strictly allowlisted:
+Accepted mission kinds are strictly allowlisted. The deployed runtime currently includes:
 
 - `projecthub.verify`
 - `projecthub.showcase`
 - `projecthub.full_cycle`
+- `system.command`
 
-No arbitrary shell, executable, path, URL, branch, script body or argument list is accepted from the bus.
+`system.command` is not unrestricted process execution. The mission carries structured command JSON inside `objective`; the runtime chooses a fixed PowerShell or CMD executable and applies the documented risk classifier. Standard and guarded operations may run automatically; approval-class operations require explicit `riskApproval:"approved"`; forbidden patterns never run automatically. See `docs/factorybridge-system-command-risk-model.md`.
 
 ## Durable journal
 
@@ -80,13 +81,15 @@ If FactoryBridge restarts with a non-terminal journal and no terminal evidence, 
 
 ## Single scheduler
 
-All mission execution enters one process-wide execution mutex. The GitHub bus, authenticated Gateway and compatibility local inbox can queue work independently, but only one mission can mutate/test the canonical ProjectHub checkout at a time.
+All mission execution enters one process-wide execution scheduler boundary. GitHub bus, authenticated Gateway and compatibility local inbox may queue work independently, while mutually exclusive work against the canonical ProjectHub checkout remains serialized.
 
-This is the first scheduler boundary. Future worktree/container isolation may permit safe parallel read-only or isolated jobs without weakening this invariant.
+Paused work must not monopolize the global scheduler. This behavior is now proven live: `M-YIELD-TARGET-20260909-1637` reached `CONTROL_ACK: PAUSE`; while it remained paused, `M-YIELD-PROBE-20260909-1637` executed and completed `DONE`; after `RESUME`, the target mission also completed `DONE`.
+
+Future worktree/container isolation may permit additional safe parallel read-only or isolated jobs without weakening checkout integrity.
 
 ## Independent polling and controls
 
-After durable reservation and ACK, mission execution runs in a separate goroutine. The GitHub poller remains available during long-running work.
+After durable reservation and ACK, mission execution runs independently from polling. The GitHub poller remains available during long-running work.
 
 V2 control message:
 
@@ -105,11 +108,27 @@ Allowed controls:
 - `RESUME`
 - `CANCEL`
 
-Controls are applied at deterministic stage boundaries. FactoryBridge does not kill an already-running external build/test subprocess just to satisfy a control message; it stops or pauses at the next safe boundary.
+Controls are applied at deterministic safe boundaries. FactoryBridge does not kill an already-running external build/test subprocess merely to satisfy a control message; it stops or pauses at the next safe boundary.
 
 ## Pagination and backoff
 
 The V2 poller paginates issue comments in pages of 100 and can consume multiple pages in one poll. This removes the single-page blind spot present in the first implementation. Poll failures increase the next delay up to five minutes; a successful poll resets it to 60 seconds.
+
+The administrative poller was also repaired after a PowerShell comment-ID sorting failure and now runs successfully on its scheduled cadence. The self-update path subsequently completed a full `UPDATE_RESULT: DONE` for runtime commit `a0abdf1d1964bbfbe345d25cb5642ee087eeb077`.
+
+## Live V2 evidence — 2026-09-09
+
+Canonical Issue #7 currently contains the following decisive evidence:
+
+- self-update `A-SYSTEM-COMMAND-20260909-143009` → `UPDATE_RESULT: DONE` for `a0abdf1d1964bbfbe345d25cb5642ee087eeb077`;
+- `M-YIELD-TARGET-20260909-1637` → `PAUSE`, later `RESUME`, then `DONE`;
+- `M-YIELD-PROBE-20260909-1637` → `DONE` while the target mission remained paused, proving scheduler yield;
+- `M-NETWORK-RECOVERY-20260909-1648` → `DONE`, proving GitHub DNS/fetch recovery after earlier transient `Could not resolve host: github.com` failures;
+- `M-SYSCMD-STANDARD-20260909-1652` → `ACK: ACCEPTED` then `CHECKPOINT: DONE`, proving live `system.command` execution on target runtime commit `a0abdf1d1964bbfbe345d25cb5642ee087eeb077`.
+
+The `system.command` smoke returned PowerShell `5.1.22621.4249`, Git `2.55.0.windows.5` and a live result for the scheduled task `FactoryBridge Admin Poller`.
+
+Historical `NEEDS_BRAIN` states tied to the earlier transient DNS outage remain valid historical evidence but are superseded operationally by `M-NETWORK-RECOVERY-20260909-1648: DONE`.
 
 ## Historical V1 behavior
 
@@ -126,9 +145,11 @@ After V2 cutover, historical V1 messages may be parsed for evidence compatibilit
 
 ## Public Gateway minimization
 
-Public Tailscale endpoints remain read-only. V2 hardening removes mission objective, internal summary, decision question, step output and local filesystem paths from public checkpoint data. Public attention only reports whether attention is required plus mission ID/state metadata.
+Public Tailscale endpoints are intended to remain read-only. V2 hardening removes mission objective, internal summary, decision question, step output and local filesystem paths from public checkpoint data. Public attention should report only whether attention is required plus mission ID/state metadata.
 
-The private Gateway remains bearer-protected.
+The private Gateway remains bearer-protected by design.
+
+Because the latest live validation sequence focused on the GitHub bus, scheduler, network recovery, self-update and `system.command`, re-run the public minimized-payload probe and unauthenticated-private-endpoint `401` check before using those two Gateway properties as fresh evidence for the current runtime.
 
 ## Current network/storage roles
 
@@ -141,13 +162,13 @@ The private Gateway remains bearer-protected.
 
 ## Security boundary still open
 
-The protocol allowlist is not an OS sandbox. `dotnet build` and `dotnet test` execute repository-controlled code with the Windows identity running FactoryBridge. The next major hardening boundary is an isolated runner identity/VM/WSL/container with restricted access to personal files and credentials.
+The protocol allowlist and command risk classifier are not an OS sandbox. `dotnet build`, `dotnet test` and approved command execution run with the Windows identity running FactoryBridge. The next major hardening boundary is an isolated runner identity/VM/WSL/container with restricted access to personal files and credentials.
 
 A dedicated fine-grained GitHub credential restricted to the Runtime Bus is also preferable to reusing a broader cached Git credential. The code never writes the credential to the bus or evidence, but credential scope remains an account-side configuration concern.
 
-## Promotion gate for V2
+## Promotion status for V2
 
-Do not call V2 locally deployed until all of the following pass on the notebook:
+The original promotion checklist was:
 
 1. `go test ./...`;
 2. `go build`;
@@ -158,4 +179,6 @@ Do not call V2 locally deployed until all of the following pass on the notebook:
 7. CHECKPOINT returns `DONE` for the authorized commit;
 8. public Gateway probe confirms minimized payload and private endpoint still returns 401 without bearer.
 
-Until this gate passes, V1 remains the currently installed runtime behavior even though V2 source is present on repository `main`.
+The runtime is no longer merely staged: self-update/promotion to `a0abdf1d1964bbfbe345d25cb5642ee087eeb077` returned `UPDATE_RESULT: DONE`, repeated V2 missions have completed successfully, controls remain responsive, scheduler-yield is proven, network recovery is proven and `system.command` is proven live.
+
+Do not infer fresh completion of item 8 solely from these Issue #7 mission results. Re-probe the public/private Gateway boundary when a fully refreshed promotion-gate certificate is required.
