@@ -1,6 +1,6 @@
 # FactoryBridge — GitHub Runtime Bus
 
-Status: rollout in progress
+Status: **PRIMARY / migration complete**
 
 ## Objective
 
@@ -57,7 +57,7 @@ The motor posts only compact state:
 - duration;
 - FactoryBridge version.
 
-Full logs, builds, traces, retries and test evidence remain under `%LOCALAPPDATA%\FactoryBridge` and `ProjectHub-Lab`.
+Full logs, builds, traces, retries and test evidence remain under `%LOCALAPPDATA%\FactoryBridge` and `%USERPROFILE%\ProjectHub-Lab`.
 
 ## Authentication
 
@@ -77,21 +77,52 @@ The runtime keeps its cursor in `%LOCALAPPDATA%\FactoryBridge\state\github-bus.j
 
 Before re-running a mission after a transient GitHub write failure/restart, it checks local mission evidence. A completed local mission can therefore re-publish its checkpoint without repeating the expensive computation.
 
-## Network roles
+## Network and storage roles
 
-- GitHub Issue #7: brain↔motor control mailbox.
-- Tailscale Funnel: human-facing dashboard/showcase access.
-- Google Drive: fallback and canonical documentation during migration; not the target primary execution bus.
+- **GitHub Issue #7** — canonical brain↔motor control mailbox.
+- **Tailscale Funnel** — human-facing dashboard/showcase access.
+- **`%LOCALAPPDATA%\FactoryBridge\mailbox`** — local runtime mailbox/status compatibility root.
+- **`%LOCALAPPDATA%\FactoryBridge`** — state, evidence, staging and runtime data.
+- **`%USERPROFILE%\ProjectHub-Lab`** — human-testable ProjectHub showcase builds.
+- **Google Drive `FACTORY_BRIDGE`** — canonical docs, compact brain state and emergency bootstrap/recovery only. It is no longer an execution queue, result store, watchdog or log store.
 
-## Rollout gate
+## Proven rollout
 
-The GitHub bus becomes primary only after an end-to-end smoke proves:
+The rollout gate passed on 2026-09-09.
 
-1. ChatGPT posts a MISSION to Issue #7.
-2. Local FactoryBridge reads it without Drive participation.
-3. Motor posts ACK.
-4. ProjectHub verify runs locally.
-5. Motor posts compact CHECKPOINT.
-6. Repeated polling stays low-volume and no token/path is leaked.
+### Proof 1 — verify
 
-Until that proof passes, the legacy Drive command path remains available for recovery/bootstrap.
+`M-BUS-SMOKE-20260909-001`
+
+- ChatGPT posted MISSION to Issue #7.
+- Local FactoryBridge returned ACK.
+- `projecthub.verify` executed locally.
+- CHECKPOINT returned `DONE`.
+- validated ProjectHub commit: `6494e7b51aae694f4559f836199cb78212976edc`.
+- local execution duration: 30,440 ms.
+
+### Proof 2 — full cycle
+
+`M-BUS-FULL-20260909-001`
+
+- MISSION/ACK traveled only through Issue #7.
+- local cycle completed sync → verify → showcase publish → local smoke.
+- CHECKPOINT returned `DONE`.
+- validated ProjectHub commit: `6494e7b51aae694f4559f836199cb78212976edc`.
+- local execution duration: 34,043 ms.
+
+## Drive detachment
+
+The runtime configuration was migrated from the synchronized Google Drive root to:
+
+`%LOCALAPPDATA%\FactoryBridge\mailbox`
+
+The legacy Drive operational directories (`00_STATUS`, `01_COMMANDS`, `01_INBOX`, `02_OUTBOX`, `02_RESULTS`, `03_ARCHIVE`) and old executable/build/log artifacts were removed after the new local root was activated.
+
+The Drive keeps only compact brain/documentation material plus explicit recovery/bootstrap files.
+
+## Recovery
+
+If the GitHub bus becomes unavailable, recover the local runtime with `RECOVER_FACTORY_BRIDGE.cmd` or reinstall from `INSTALL_FACTORY_BRIDGE_CLEAN.cmd`. Re-enabling the old Drive execution queue is an emergency migration/recovery operation, not the normal operating mode.
+
+The runtime still identifies as FactoryBridge `0.13.0`; this migration does not claim a semantic version bump.
