@@ -46,7 +46,7 @@ if errorlevel 1 goto :fail
 
 echo Registering fixed elevated allowcommand task...
 powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='Stop'; $name='%TASK_NAME%'; $old=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue; if($null -ne $old){Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName $name -Confirm:$false}; $action=New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c ""%CMD_DST%""') -WorkingDirectory '%ADMIN_DIR%'; $trigger=New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 3650); $settings=New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; $principal=New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest; Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null; Enable-ScheduledTask -TaskName $name | Out-Null; $task=Get-ScheduledTask -TaskName $name; Write-Host ('TASK=' + $task.TaskName); Write-Host ('STATE=' + $task.State); Write-Host ('RUN_LEVEL=Highest');"
+  "$ErrorActionPreference='Stop'; $name='%TASK_NAME%'; $old=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue; if($null -ne $old){Stop-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName $name -Confirm:$false}; $action=New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c ""%CMD_DST%""') -WorkingDirectory '%ADMIN_DIR%'; $trigger=New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650); $settings=New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; $principal=New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest; Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null; Enable-ScheduledTask -TaskName $name | Out-Null; $task=Get-ScheduledTask -TaskName $name; Write-Host ('TASK=' + $task.TaskName); Write-Host ('STATE=' + $task.State); Write-Host ('RUN_LEVEL=Highest');"
 if errorlevel 1 goto :fail
 
 echo.
@@ -56,7 +56,7 @@ echo   %CMD_DST%
 echo Scheduled task:
 echo   %TASK_NAME%
 echo Poll cadence:
-echo   hourly
+echo   every minute
 echo Allowed remote action:
 echo   bridge.self_update ONLY via FACTORY_ADMIN_V1 approval on GitHub Issue #7
 echo No arbitrary command, path, shell or remote arguments are accepted.
