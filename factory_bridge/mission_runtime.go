@@ -230,6 +230,23 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 	}
 
 	switch mission.Kind {
+	case "cafe.ccc.scan":
+		if err := waitForMissionPermission(mission.ID); err != nil {
+			return fail(err.Error(), Result{})
+		}
+		scan := executeCafeCCCScan(cfg, mission, time.Now(), r)
+		evidence.Results["cafe-ccc-scan"] = scan
+		cp.Steps = append(cp.Steps, missionStep("cafe-ccc-scan", scan))
+		cp.Commit = strings.ToLower(strings.TrimSpace(mission.TargetCommit))
+		if scan.Status != "ok" {
+			return fail("Café CCC/SVRS scan failed; local evidence and sanitized errors were retained.", scan)
+		}
+		cp.State = "DONE"
+		cp.Summary = scan.Output
+		if strings.TrimSpace(cp.Summary) == "" {
+			cp.Summary = "Café CCC/SVRS scan completed successfully."
+		}
+
 	case "projecthub.verify":
 		if err := waitForMissionPermission(mission.ID); err != nil {
 			return fail(err.Error(), Result{})
