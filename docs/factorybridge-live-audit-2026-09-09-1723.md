@@ -1,6 +1,6 @@
 # FactoryBridge — Live Audit — 2026-09-09 17:23 BRT
 
-Status: **runtime v0.14.0 promoted and live-proven; core Runtime Bus healthy; external Gateway boundary and destructive-risk qualification remain open.**
+Status: **runtime v0.14.0 promoted and live-proven; core Runtime Bus healthy; system.command standard/guarded/approval-block/forbidden-block paths have live evidence. External Gateway boundary and OS isolation remain open.**
 
 ## Canonical runtime
 
@@ -15,7 +15,14 @@ Status: **runtime v0.14.0 promoted and live-proven; core Runtime Bus healthy; ex
 
 `U-VERSION-ALIGN-20260909-1703` returned `UPDATE_RESULT: DONE` for commit `120359f4a620c6d163c06885a8802ea41eea186f`; tests, build, promotion and post-update health validation passed.
 
-`M-VERSION-CONFIRM-20260909-1708` then returned `ACK: ACCEPTED` and `CHECKPOINT: DONE` with `bridgeVersion: 0.14.0`, proving the promoted binary is the runtime actually processing V2 missions.
+`M-VERSION-CONFIRM-20260909-1708` returned `ACK: ACCEPTED` and `CHECKPOINT: DONE` with `bridgeVersion: 0.14.0`, proving the promoted binary is the runtime actually processing V2 missions.
+
+Risk-classifier live probes on v0.14.0 also completed as designed:
+
+- `M-RISK-APPROVAL-BLOCK-20260909-1723` -> `ACK: ACCEPTED` -> `CHECKPOINT: BLOCKED` in 53 ms, with summary `command requires explicit riskApproval=approved: file or directory deletion requires explicit approval`.
+- `M-RISK-FORBIDDEN-BLOCK-20260909-1723` -> `ACK: ACCEPTED` -> `CHECKPOINT: BLOCKED` in 25 ms, with summary `command blocked: obfuscated or dynamically evaluated command text is not accepted`.
+
+The approval probe targeted a deliberately nonexistent temp path and omitted approval; the forbidden probe used an encoded-command pattern. Both were rejected before useful command execution, providing end-to-end fail-closed evidence without destructive effects.
 
 Earlier live evidence remains valid for the current architecture:
 
@@ -39,7 +46,11 @@ Earlier live evidence remains valid for the current architecture:
 7. Multi-page comment retrieval removes the original 100-comment blind spot.
 8. Transient network failure is observable and recoverable without corrupting repository state.
 9. Runtime self-update is operational and verifiable.
-10. Runtime version metadata is now aligned with the deployed v0.14 feature set.
+10. Runtime version metadata is aligned with the deployed v0.14 feature set.
+11. `system.command` standard execution is live-proven.
+12. `system.command` guarded execution is live-proven.
+13. Approval-class commands without explicit approval are live-proven to fail closed.
+14. Forbidden encoded/obfuscated command patterns are live-proven to fail closed.
 
 ### Known limitations / residual risk
 
@@ -52,21 +63,12 @@ Earlier live evidence remains valid for the current architecture:
 7. **ChatGPT connector policy is an upstream boundary.** Some operational payloads may be blocked before reaching GitHub even when FactoryBridge itself would accept them.
 8. **Admin self-update has a bootstrap dependency.** A broken admin poller can stall update ingestion; retain a known-good recovery path outside the normal runtime.
 9. **Public Gateway promotion evidence is stale for the current runtime.** Re-probe public metadata minimization and unauthenticated private endpoint `401` before declaring the external boundary freshly closed.
-10. **Risk classifier qualification is incomplete.** Standard and guarded paths have live evidence. Approval-without-approval and forbidden-pattern fail-closed behavior require dedicated canonical live probes before being called end-to-end proven.
-
-## Qualification actions opened by this audit
-
-Two non-destructive fail-closed probes were issued against runtime commit `120359f4a620c6d163c06885a8802ea41eea186f`:
-
-- `M-RISK-APPROVAL-BLOCK-20260909-1723`: a deletion-shaped command targeting a deliberately nonexistent temp path and omitting `riskApproval`; expected terminal state is `BLOCKED` before the runner is invoked.
-- `M-RISK-FORBIDDEN-BLOCK-20260909-1723`: an encoded-command pattern; expected terminal state is `BLOCKED` regardless of approval.
-
-These probes are safe because the expected classifier behavior prevents invocation; the first also targets a deliberately nonexistent audit path.
+10. **Explicit approval execution itself is not yet live-qualified.** The no-approval block is proven; a deliberately safe, reversible approval-class live test should be designed before claiming the approved-destructive execution branch is end-to-end proven.
 
 ## Next hardening order
 
-1. Confirm both risk probes fail closed as designed.
-2. Re-run the Gateway public-minimization and private-401 checks against v0.14.0.
+1. Re-run the Gateway public-minimization and private-401 checks against v0.14.0.
+2. Design one reversible approval-class execution test if live proof of the approved branch is operationally necessary.
 3. Provision a dedicated fine-grained GitHub credential for the Runtime Bus.
 4. Establish a golden known-good recovery commit and recovery bootstrap independent of current `main`.
 5. Move execution into a restricted Windows account, WSL/container or VM boundary.
@@ -75,4 +77,4 @@ These probes are safe because the expected classifier behavior prevents invocati
 
 ## Operational conclusion
 
-FactoryBridge is no longer a proof of concept. The core remote-execution control loop is functioning and durable enough for controlled development/diagnostic work. The principal remaining risks are isolation, credential/repository governance and completion of the external Gateway/risk-classifier qualification matrix—not basic transport or execution viability.
+FactoryBridge is no longer a proof of concept. The core remote-execution control loop is functioning and durable enough for controlled development and diagnostic work. The risk classifier now has live evidence for automatic standard/guarded execution and fail-closed approval/forbidden decisions. The principal remaining risks are OS isolation, credential/repository governance, external Gateway revalidation and completion of the broader chaos matrix—not basic transport or execution viability.
