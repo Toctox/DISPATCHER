@@ -35,6 +35,7 @@ func writeSupervisorStatus(cfg Config, started time.Time, executorPID, restartCo
 	if !lastExit.IsZero() {
 		status.LastExecutorExitAt = lastExit.Format(time.RFC3339Nano)
 	}
+	// Drive status is external evidence only. Supervision decisions never read it.
 	return writeJSONAtomic(statusPath(cfg, supervisorStatusFileName), status)
 }
 
@@ -52,12 +53,17 @@ func waitForBridge(cfg Config, started time.Time, restartCount int, lastErr stri
 }
 
 // healthy accepts only valid heartbeats from the currently supervised PID and
-// remembers the newest valid timestamp observed. A transient read/parse error,
-// a stale Drive view, or status belonging to another PID is not proof that the
-// child is hung. Only a valid same-PID heartbeat that remains stale relative to
-// the newest heartbeat already observed can trigger a kill.
+// remembers the newest valid timestamp observed. Its source of truth is local
+// runtime state under LOCALAPPDATA, never the Google Drive mirror. A transient
+// local read/parse error is not proof that the child is hung. Only a valid
+// same-PID heartbeat that remains stale can trigger a kill.
 func (m *executorHeartbeatMonitor) healthy(cfg Config, now time.Time) bool {
-	state, err := readJSONFile[ExecutorStatus](statusPath(cfg, executorStatusFileName))
+	_ = cfg
+	path, err := localRuntimeStatusPath(executorStatusFileName)
+	if err != nil {
+		return true
+	}
+	state, err := readJSONFile[ExecutorStatus](path)
 	if err != nil {
 		return true
 	}
