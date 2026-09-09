@@ -12,18 +12,22 @@ import (
 )
 
 const (
-	brainDirName        = "00_BRAIN"
-	missionInboxDirName = "01_INBOX"
+	brainDirName         = "00_BRAIN"
+	missionInboxDirName  = "01_INBOX"
 	missionOutboxDirName = "02_OUTBOX"
-	docsDirName         = "03_DOCS"
-	missionPollInterval = 2 * time.Second
+	docsDirName          = "03_DOCS"
+	missionPollInterval  = 2 * time.Second
 )
 
 type Mission struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	CreatedAt string `json:"createdAt,omitempty"`
-	Objective string `json:"objective,omitempty"`
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	CreatedAt    string `json:"createdAt,omitempty"`
+	Objective    string `json:"objective,omitempty"`
+	TargetCommit string `json:"targetCommit,omitempty"`
+	IssuedAt     string `json:"issuedAt,omitempty"`
+	ExpiresAt    string `json:"expiresAt,omitempty"`
+	PayloadHash  string `json:"payloadHash,omitempty"`
 }
 
 type MissionStepEvidence struct {
@@ -52,10 +56,10 @@ type MissionCheckpoint struct {
 }
 
 type missionEvidence struct {
-	Mission    Mission             `json:"mission"`
-	Checkpoint MissionCheckpoint   `json:"checkpoint"`
-	Results    map[string]Result   `json:"results"`
-	Notes      []string            `json:"notes,omitempty"`
+	Mission    Mission           `json:"mission"`
+	Checkpoint MissionCheckpoint `json:"checkpoint"`
+	Results    map[string]Result `json:"results"`
+	Notes      []string          `json:"notes,omitempty"`
 }
 
 func missionLocalRoot() (string, error) {
@@ -105,13 +109,8 @@ func decodeMission(path string) (Mission, error) {
 	if err := dec.Decode(&mission); err != nil {
 		return Mission{}, err
 	}
-	if !idPattern.MatchString(mission.ID) {
-		return Mission{}, errors.New("invalid mission id")
-	}
-	switch mission.Kind {
-	case "projecthub.verify", "projecthub.full_cycle", "projecthub.showcase":
-	default:
-		return Mission{}, fmt.Errorf("unsupported mission kind: %s", mission.Kind)
+	if err := validateMissionIntegrity(mission); err != nil {
+		return Mission{}, err
 	}
 	return mission, nil
 }
@@ -133,11 +132,11 @@ func missionEntries(dir string) ([]os.DirEntry, error) {
 
 func missionStep(name string, result Result) MissionStepEvidence {
 	return MissionStepEvidence{
-		Name: name,
-		Status: result.Status,
+		Name:       name,
+		Status:     result.Status,
 		DurationMs: result.DurationMs,
-		Output: compact(result.Output, 600),
-		Error: compact(result.Error, 600),
+		Output:     compact(result.Output, 600),
+		Error:      compact(result.Error, 600),
 	}
 }
 
@@ -176,11 +175,11 @@ func missionCommit(result Result) string {
 func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 	started := time.Now()
 	cp := MissionCheckpoint{
-		MissionID: mission.ID,
-		Kind: mission.Kind,
-		State: "RUNNING",
-		StartedAt: started.Format(time.RFC3339),
-		Objective: strings.TrimSpace(mission.Objective),
+		MissionID:     mission.ID,
+		Kind:          mission.Kind,
+		State:         "RUNNING",
+		StartedAt:     started.Format(time.RFC3339),
+		Objective:     strings.TrimSpace(mission.Objective),
 		BridgeVersion: bridgeVersion,
 	}
 	localDir, err := missionLocalDir(mission.ID)
@@ -191,6 +190,18 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 		cp.DurationMs = time.Since(started).Milliseconds()
 		return cp
 	}
+	if _, _, err := reserveMission(mission); err != nil {
+		cp.State = "BLOCKED"
+		cp.Summary = err.Error()
+		cp.FinishedAt = time.Now().Format(time.RFC3339)
+		cp.DurationMs = time.Since(started).Milliseconds()
+		return cp
+	}
+
+	missionExecutionMu.Lock()
+	defer missionExecutionMu.Unlock()
+	_ = markMissionJournalState(mission.ID, "RUNNING")
+
 	cp.LocalEvidencePath = localDir
 	_ = writeJSONAtomic(filepath.Join(localDir, "mission.json"), mission)
 	_ = writeMissionCheckpoint(cfg, cp)
@@ -204,11 +215,25 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 		cp.DurationMs = time.Since(started).Milliseconds()
 		evidence.Checkpoint = cp
 		_ = writeMissionEvidence(localDir, evidence)
+		_ = markMissionJournalState(mission.ID, cp.State)
 		return cp
+	}
+
+	if err := validateMissionIntegrity(mission); err != nil {
+		return fail("Mission integrity validation failed: "+err.Error(), Result{})
+	}
+	if err := waitForMissionPermission(mission.ID); err != nil {
+		return fail(err.Error(), Result{})
+	}
+	if err := ensureMissionTargetCommit(cfg, mission, r); err != nil {
+		return fail("Authorized target commit validation failed: "+err.Error(), Result{})
 	}
 
 	switch mission.Kind {
 	case "projecthub.verify":
+		if err := waitForMissionPermission(mission.ID); err != nil {
+			return fail(err.Error(), Result{})
+		}
 		verify := executeProjectHubVerify(cfg, Command{ID: mission.ID, Action: "projecthub.verify"}, time.Now(), r)
 		evidence.Results["verify"] = verify
 		cp.Steps = append(cp.Steps, missionStep("verify", verify))
@@ -228,6 +253,9 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 		cp.Summary = "ProjectHub verification completed successfully."
 
 	case "projecthub.showcase":
+		if err := waitForMissionPermission(mission.ID); err != nil {
+			return fail(err.Error(), Result{})
+		}
 		publish := executeProjectHubShowcasePublish(cfg, Command{ID: mission.ID, Action: "projecthub.showcase"}, time.Now(), r)
 		evidence.Results["showcase"] = publish
 		cp.Steps = append(cp.Steps, missionStep("showcase", publish))
@@ -242,11 +270,20 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 		cp.Summary = "ProjectHub showcase build published successfully."
 
 	case "projecthub.full_cycle":
+		if err := waitForMissionPermission(mission.ID); err != nil {
+			return fail(err.Error(), Result{})
+		}
 		syncResult := executeProjectHubSync(cfg, Command{ID: mission.ID, Action: "projecthub.sync"}, time.Now(), r)
 		evidence.Results["sync"] = syncResult
 		cp.Steps = append(cp.Steps, missionStep("sync", syncResult))
 		if syncResult.Status != "ok" {
 			return fail("ProjectHub sync failed before the autonomous cycle could continue.", syncResult)
+		}
+		if err := ensureCanonicalCheckoutAtTarget(cfg, mission, r); err != nil {
+			return fail("ProjectHub moved away from the authorized target during sync: "+err.Error(), syncResult)
+		}
+		if err := waitForMissionPermission(mission.ID); err != nil {
+			return fail(err.Error(), Result{})
 		}
 
 		verify := executeProjectHubVerify(cfg, Command{ID: mission.ID, Action: "projecthub.verify"}, time.Now(), r)
@@ -264,6 +301,9 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 			}
 			return fail("ProjectHub verify stage failed; retries and complete logs are local.", verify)
 		}
+		if err := waitForMissionPermission(mission.ID); err != nil {
+			return fail(err.Error(), Result{})
+		}
 
 		publish := executeProjectHubShowcasePublish(cfg, Command{ID: mission.ID, Action: "projecthub.showcase"}, time.Now(), r)
 		evidence.Results["showcase"] = publish
@@ -273,6 +313,9 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 		}
 		if publish.Status != "ok" {
 			return fail("Verification passed but showcase publication failed.", publish)
+		}
+		if err := waitForMissionPermission(mission.ID); err != nil {
+			return fail(err.Error(), Result{})
 		}
 
 		smoke := executeProjectHubShowcaseSmoke(cfg, Command{ID: mission.ID, Action: "projecthub.showcase.smoke"}, time.Now())
@@ -289,6 +332,7 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 	cp.DurationMs = time.Since(started).Milliseconds()
 	evidence.Checkpoint = cp
 	_ = writeMissionEvidence(localDir, evidence)
+	_ = markMissionJournalState(mission.ID, cp.State)
 	return cp
 }
 
@@ -296,12 +340,12 @@ func processMissionFile(cfg Config, path string) error {
 	mission, err := decodeMission(path)
 	if err != nil {
 		bad := MissionCheckpoint{
-			MissionID: fmt.Sprintf("BAD-%d", time.Now().UnixNano()),
-			Kind: "invalid",
-			State: "BLOCKED",
-			StartedAt: time.Now().Format(time.RFC3339),
-			FinishedAt: time.Now().Format(time.RFC3339),
-			Summary: err.Error(),
+			MissionID:     fmt.Sprintf("BAD-%d", time.Now().UnixNano()),
+			Kind:          "invalid",
+			State:         "BLOCKED",
+			StartedAt:     time.Now().Format(time.RFC3339),
+			FinishedAt:    time.Now().Format(time.RFC3339),
+			Summary:       err.Error(),
 			BridgeVersion: bridgeVersion,
 		}
 		_ = writeMissionCheckpoint(cfg, bad)
