@@ -7,6 +7,8 @@ import (
 )
 
 func TestLifetimeHeartbeatRefreshesIdleExecutor(t *testing.T) {
+	localAppData := t.TempDir()
+	t.Setenv("LOCALAPPDATA", localAppData)
 	bridge := t.TempDir()
 	cfg := Config{BridgeRoot: bridge}
 	if err := ensureBridgeDirs(cfg); err != nil {
@@ -17,12 +19,16 @@ func TestLifetimeHeartbeatRefreshesIdleExecutor(t *testing.T) {
 	stop := startExecutorLifetimeHeartbeat(cfg, started, 15*time.Millisecond)
 	defer stop()
 
-	before, err := readJSONFile[ExecutorStatus](statusPath(cfg, executorStatusFileName))
+	localStatus, err := localRuntimeStatusPath(executorStatusFileName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := readJSONFile[ExecutorStatus](localStatus)
 	if err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(55 * time.Millisecond)
-	after, err := readJSONFile[ExecutorStatus](statusPath(cfg, executorStatusFileName))
+	after, err := readJSONFile[ExecutorStatus](localStatus)
 	if err != nil {
 		t.Fatal(err)
 	}
