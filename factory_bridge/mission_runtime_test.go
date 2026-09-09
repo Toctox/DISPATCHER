@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,19 @@ import (
 func TestDecodeMissionAllowlistAndStrictSchema(t *testing.T) {
 	dir := t.TempDir()
 	valid := filepath.Join(dir, "MISSION__OK.json")
-	if err := os.WriteFile(valid, []byte(`{"id":"M-001","kind":"projecthub.full_cycle","objective":"validate and publish"}`), 0o600); err != nil {
+	m := hardenedTestMission(t, "M-001")
+	m.Kind = "projecthub.full_cycle"
+	m.Objective = "validate and publish"
+	hash, err := missionPayloadHash(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.PayloadHash = hash
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(valid, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mission, err := decodeMission(valid)
