@@ -10,6 +10,7 @@ import (
 )
 
 func TestDecodeMissionAllowlistAndStrictSchema(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	dir := t.TempDir()
 	valid := filepath.Join(dir, "MISSION__OK.json")
 	m := hardenedTestMission(t, "M-001")
