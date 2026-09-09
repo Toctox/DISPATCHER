@@ -19,18 +19,14 @@ import (
 const gatewayListenAddress = "127.0.0.1:8787"
 
 type publicMissionCheckpoint struct {
-	MissionID        string                `json:"missionId,omitempty"`
-	Kind             string                `json:"kind,omitempty"`
-	State            string                `json:"state"`
-	StartedAt        string                `json:"startedAt,omitempty"`
-	FinishedAt       string                `json:"finishedAt,omitempty"`
-	DurationMs       int64                 `json:"durationMs,omitempty"`
-	Objective        string                `json:"objective,omitempty"`
-	Commit           string                `json:"commit,omitempty"`
-	Summary          string                `json:"summary,omitempty"`
-	DecisionQuestion string                `json:"decisionQuestion,omitempty"`
-	Steps            []MissionStepEvidence `json:"steps,omitempty"`
-	BridgeVersion    string                `json:"bridgeVersion"`
+	MissionID     string `json:"missionId,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	State         string `json:"state"`
+	StartedAt     string `json:"startedAt,omitempty"`
+	FinishedAt    string `json:"finishedAt,omitempty"`
+	DurationMs    int64  `json:"durationMs,omitempty"`
+	Commit        string `json:"commit,omitempty"`
+	BridgeVersion string `json:"bridgeVersion"`
 }
 
 type publicRuntimeStatus struct {
@@ -95,18 +91,14 @@ func ensureGatewayToken() (string, error) {
 
 func sanitizeCheckpoint(cp MissionCheckpoint) publicMissionCheckpoint {
 	return publicMissionCheckpoint{
-		MissionID:        cp.MissionID,
-		Kind:             cp.Kind,
-		State:            cp.State,
-		StartedAt:        cp.StartedAt,
-		FinishedAt:       cp.FinishedAt,
-		DurationMs:       cp.DurationMs,
-		Objective:        cp.Objective,
-		Commit:           cp.Commit,
-		Summary:          cp.Summary,
-		DecisionQuestion: cp.DecisionQuestion,
-		Steps:            cp.Steps,
-		BridgeVersion:    cp.BridgeVersion,
+		MissionID:     cp.MissionID,
+		Kind:          cp.Kind,
+		State:         cp.State,
+		StartedAt:     cp.StartedAt,
+		FinishedAt:    cp.FinishedAt,
+		DurationMs:    cp.DurationMs,
+		Commit:        cp.Commit,
+		BridgeVersion: cp.BridgeVersion,
 	}
 }
 
@@ -225,6 +217,7 @@ func writeGatewayJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
@@ -238,15 +231,7 @@ func bearerAuthorized(r *http.Request, token string) bool {
 }
 
 func validateMission(m Mission) error {
-	if !idPattern.MatchString(m.ID) {
-		return errors.New("invalid mission id")
-	}
-	switch m.Kind {
-	case "projecthub.verify", "projecthub.full_cycle", "projecthub.showcase":
-		return nil
-	default:
-		return fmt.Errorf("unsupported mission kind: %s", m.Kind)
-	}
+	return validateMissionIntegrity(m)
 }
 
 func submitMission(cfg Config, mission Mission) error {
@@ -277,24 +262,22 @@ func gatewayMux(cfg Config, token string) http.Handler {
 	mux.HandleFunc("GET /public/health", func(w http.ResponseWriter, r *http.Request) {
 		status := runtimePublicStatus(cfg)
 		writeGatewayJSON(w, http.StatusOK, map[string]any{
-			"ok": status.OK,
-			"bridgeVersion": status.BridgeVersion,
+			"ok":             status.OK,
+			"bridgeVersion":  status.BridgeVersion,
 			"executorOnline": status.ExecutorOnline,
-			"observedAt": status.ObservedAt,
+			"observedAt":     status.ObservedAt,
 		})
 	})
 	mux.HandleFunc("GET /public/attention", func(w http.ResponseWriter, r *http.Request) {
 		status := runtimePublicStatus(cfg)
 		body := map[string]any{
 			"attentionRequired": status.AttentionRequired,
-			"executorOnline": status.ExecutorOnline,
-			"observedAt": status.ObservedAt,
+			"executorOnline":    status.ExecutorOnline,
+			"observedAt":        status.ObservedAt,
 		}
 		if status.Checkpoint != nil {
 			body["missionId"] = status.Checkpoint.MissionID
 			body["state"] = status.Checkpoint.State
-			body["summary"] = status.Checkpoint.Summary
-			body["decisionQuestion"] = status.Checkpoint.DecisionQuestion
 		}
 		writeGatewayJSON(w, http.StatusOK, body)
 	})
@@ -344,9 +327,12 @@ func gatewayMux(cfg Config, token string) http.Handler {
 		}
 		status := runtimePublicStatus(cfg)
 		showcase := latestShowcaseStatus()
-		tpl := template.Must(template.New("dashboard").Parse(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FactoryBridge Gateway</title><style>body{font-family:system-ui;margin:2rem;max-width:900px}code,pre{background:#f4f4f4;padding:.25rem .4rem;border-radius:4px}table{border-collapse:collapse;width:100%}td,th{padding:.5rem;border-bottom:1px solid #ddd;text-align:left}.ok{font-weight:700}</style></head><body><h1>FactoryBridge Gateway</h1><p class="ok">Executor: {{if .Status.ExecutorOnline}}ONLINE{{else}}OFFLINE{{end}}</p><table><tr><th>Bridge</th><td>{{.Status.BridgeVersion}}</td></tr><tr><th>Mission</th><td>{{if .Status.Checkpoint}}{{.Status.Checkpoint.MissionID}} — {{.Status.Checkpoint.State}}{{else}}-{{end}}</td></tr><tr><th>Attention</th><td>{{.Status.AttentionRequired}}</td></tr><tr><th>Latest showcase</th><td>{{if .Showcase.Available}}{{.Showcase.Build}}{{else}}-{{end}}</td></tr></table><p>Read-only endpoints: <code>/public/health</code>, <code>/public/attention</code>, <code>/public/checkpoint</code>, <code>/public/showcase</code>.</p></body></html>`))
+		tpl := template.Must(template.New("dashboard").Parse(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FactoryBridge Gateway</title><style>body{font-family:system-ui;margin:2rem;max-width:900px}code,pre{background:#f4f4f4;padding:.25rem .4rem;border-radius:4px}table{border-collapse:collapse;width:100%}td,th{padding:.5rem;border-bottom:1px solid #ddd;text-align:left}.ok{font-weight:700}</style></head><body><h1>FactoryBridge Gateway</h1><p class="ok">Executor: {{if .Status.ExecutorOnline}}ONLINE{{else}}OFFLINE{{end}}</p><table><tr><th>Bridge</th><td>{{.Status.BridgeVersion}}</td></tr><tr><th>Mission</th><td>{{if .Status.Checkpoint}}{{.Status.Checkpoint.MissionID}} — {{.Status.Checkpoint.State}}{{else}}-{{end}}</td></tr><tr><th>Attention</th><td>{{.Status.AttentionRequired}}</td></tr><tr><th>Latest showcase</th><td>{{if .Showcase.Available}}{{.Showcase.Build}}{{else}}-{{end}}</td></tr></table><p>Read-only endpoints: <a href="/public/health">health</a>, <a href="/public/attention">attention</a>, <a href="/public/checkpoint">checkpoint</a>, <a href="/public/showcase">showcase</a>.</p></body></html>`))
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
 		_ = tpl.Execute(w, map[string]any{"Status": status, "Showcase": showcase})
 	})
 	return mux
