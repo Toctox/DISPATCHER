@@ -122,8 +122,16 @@ func missionJournalPath(id string) (string, error) {
 	return filepath.Join(dir, missionJournalFileName), nil
 }
 
+func missionJournalReadPath(id string) (string, error) {
+	root, err := missionLocalRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, id, missionJournalFileName), nil
+}
+
 func readMissionJournal(id string) (*missionJournal, error) {
-	path, err := missionJournalPath(id)
+	path, err := missionJournalReadPath(id)
 	if err != nil {
 		return nil, err
 	}
