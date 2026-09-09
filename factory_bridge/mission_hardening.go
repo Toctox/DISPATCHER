@@ -62,7 +62,7 @@ func validateMissionIntegrity(m Mission) error {
 		return errors.New("invalid mission id")
 	}
 	switch m.Kind {
-	case "projecthub.verify", "projecthub.full_cycle", "projecthub.showcase", "cafe.ccc.scan":
+	case "projecthub.verify", "projecthub.full_cycle", "projecthub.showcase", "cafe.ccc.scan", "system.command":
 	default:
 		return fmt.Errorf("unsupported mission kind: %s", m.Kind)
 	}
@@ -287,7 +287,7 @@ func interruptedMissionJournals() ([]missionJournal, error) {
 }
 
 func ensureMissionTargetCommit(cfg Config, mission Mission, r runner) error {
-	if mission.Kind == "cafe.ccc.scan" {
+	if mission.Kind == "cafe.ccc.scan" || mission.Kind == "system.command" {
 		return ensureFactoryBridgeInstalledCommit(mission)
 	}
 	target := strings.ToLower(strings.TrimSpace(mission.TargetCommit))

@@ -230,6 +230,31 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 	}
 
 	switch mission.Kind {
+	case "system.command":
+		if err := waitForMissionPermission(mission.ID); err != nil {
+			return fail(err.Error(), Result{})
+		}
+		command := executeSystemCommand(cfg, mission, time.Now(), r)
+		evidence.Results["system-command"] = command
+		cp.Steps = append(cp.Steps, missionStep("system-command", command))
+		cp.Commit = strings.ToLower(strings.TrimSpace(mission.TargetCommit))
+		if command.Status == "blocked" {
+			cp.State = "BLOCKED"
+			cp.Summary = command.Error
+			if command.Meta["requiresApproval"] == true {
+				cp.DecisionQuestion = "If this destructive or sensitive operation is intended, submit a new system.command mission with riskApproval=approved."
+			}
+			break
+		}
+		if command.Status != "ok" {
+			return fail("System command failed; stdout, stderr and risk classification were retained locally.", command)
+		}
+		cp.State = "DONE"
+		cp.Summary = command.Output
+		if strings.TrimSpace(cp.Summary) == "" {
+			cp.Summary = "System command completed successfully."
+		}
+
 	case "cafe.ccc.scan":
 		if err := waitForMissionPermission(mission.ID); err != nil {
 			return fail(err.Error(), Result{})
