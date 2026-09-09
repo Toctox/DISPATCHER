@@ -14,6 +14,11 @@ const (
 	bridgeRetryInterval         = 5 * time.Second
 )
 
+type executorHeartbeatMonitor struct {
+	pid          int
+	lastObserved time.Time
+}
+
 func writeSupervisorStatus(cfg Config, started time.Time, executorPID, restartCount int, lastStart, lastExit time.Time, lastErr string) error {
 	status := SupervisorStatus{
 		BridgeVersion: bridgeVersion,
@@ -46,19 +51,30 @@ func waitForBridge(cfg Config, started time.Time, restartCount int, lastErr stri
 	}
 }
 
-func executorHeartbeatHealthy(cfg Config, executorPID int, now time.Time, launchedAt time.Time) bool {
+// healthy accepts only valid heartbeats from the currently supervised PID and
+// remembers the newest valid timestamp observed. A transient read/parse error,
+// a stale Drive view, or status belonging to another PID is not proof that the
+// child is hung. Only a valid same-PID heartbeat that remains stale relative to
+// the newest heartbeat already observed can trigger a kill.
+func (m *executorHeartbeatMonitor) healthy(cfg Config, now time.Time) bool {
 	state, err := readJSONFile[ExecutorStatus](statusPath(cfg, executorStatusFileName))
 	if err != nil {
-		return now.Sub(launchedAt) <= executorHangThreshold
+		return true
 	}
-	if state.PID != executorPID {
-		return now.Sub(launchedAt) <= executorHangThreshold
+	if state.PID != m.pid {
+		return true
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, state.HeartbeatAt)
 	if err != nil {
-		return now.Sub(launchedAt) <= executorHangThreshold
+		return true
 	}
-	age := now.Sub(parsed)
+	if parsed.After(m.lastObserved) {
+		m.lastObserved = parsed
+	}
+	if m.lastObserved.IsZero() {
+		return true
+	}
+	age := now.Sub(m.lastObserved)
 	if age < 0 {
 		age = 0
 	}
@@ -108,6 +124,7 @@ func runSupervisor(cfg Config) error {
 
 		lastStart = time.Now()
 		executorPID := cmd.Process.Pid
+		monitor := executorHeartbeatMonitor{pid: executorPID}
 		_ = writeSupervisorStatus(cfg, started, executorPID, restartCount, lastStart, lastExit, lastErr)
 		fmt.Printf("Executor started pid=%d\n", executorPID)
 
@@ -136,7 +153,7 @@ func runSupervisor(cfg Config) error {
 			case <-ticker.C:
 				now := time.Now()
 				_ = writeSupervisorStatus(cfg, started, executorPID, restartCount, lastStart, lastExit, lastErr)
-				if !executorHeartbeatHealthy(cfg, executorPID, now, lastStart) {
+				if !monitor.healthy(cfg, now) {
 					forcedExitReason = fmt.Sprintf("last executor exit: heartbeat stale for more than %s; supervisor killed executor", executorHangThreshold)
 					lastErr = forcedExitReason
 					fmt.Fprintln(os.Stderr, forcedExitReason)
