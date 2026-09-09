@@ -16,15 +16,23 @@ if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
     throw "Configuration not found: $configPath"
 }
 
-function Invoke-FactoryBridgeUpdateIfRequested {
-    param([string]$ProjectPath)
-
+function Get-FactoryBridgeRoot {
     $bridgeConfigPath = Join-Path $env:LOCALAPPDATA 'FactoryBridge\config.json'
     if (-not (Test-Path -LiteralPath $bridgeConfigPath -PathType Leaf)) {
-        return $false
+        return $null
     }
     $bridgeConfig = Get-Content -LiteralPath $bridgeConfigPath -Raw | ConvertFrom-Json
     $bridgeRoot = [string]$bridgeConfig.bridgeRoot
+    if ([string]::IsNullOrWhiteSpace($bridgeRoot)) {
+        return $null
+    }
+    return $bridgeRoot
+}
+
+function Invoke-FactoryBridgeUpdateIfRequested {
+    param([string]$ProjectPath)
+
+    $bridgeRoot = Get-FactoryBridgeRoot
     if ([string]::IsNullOrWhiteSpace($bridgeRoot)) {
         return $false
     }
@@ -44,6 +52,32 @@ function Invoke-FactoryBridgeUpdateIfRequested {
     }
     Remove-Item -LiteralPath $request -Force
     [Console]::Error.WriteLine('{"kind":"FACTORY_BRIDGE_UPDATE","status":"STAGED_AND_APPLY_SCHEDULED"}')
+    return $true
+}
+
+function Invoke-FactoryGatewaySetupIfRequested {
+    param([string]$ProjectPath)
+
+    $bridgeRoot = Get-FactoryBridgeRoot
+    if ([string]::IsNullOrWhiteSpace($bridgeRoot)) {
+        return $false
+    }
+    $request = Join-Path $bridgeRoot '00_STATUS\factory-gateway-setup.request.json'
+    if (-not (Test-Path -LiteralPath $request -PathType Leaf)) {
+        return $false
+    }
+
+    $setup = Join-Path $ProjectPath 'scripts\setup-factory-gateway.ps1'
+    if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
+        throw "Factory gateway setup not found: $setup"
+    }
+
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $setup
+    if ($LASTEXITCODE -ne 0) {
+        throw "Factory gateway setup failed with exit code $LASTEXITCODE."
+    }
+    Remove-Item -LiteralPath $request -Force
+    [Console]::Error.WriteLine('{"kind":"FACTORY_GATEWAY_SETUP","status":"READY"}')
     return $true
 }
 
@@ -149,6 +183,9 @@ Push-Location -LiteralPath $projectPath
 try {
     if (-not $DryRun) {
         if (Invoke-FactoryBridgeUpdateIfRequested -ProjectPath $projectPath) {
+            exit 0
+        }
+        if (Invoke-FactoryGatewaySetupIfRequested -ProjectPath $projectPath) {
             exit 0
         }
         Ensure-DispatcherScheduledTask -ProjectPath $projectPath
