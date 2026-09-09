@@ -257,13 +257,22 @@ func ensureMissionTargetCommit(cfg Config, mission Mission, r runner) error {
 		return fmt.Errorf("target commit moved before execution: authorized=%s origin/main=%s", target, origin)
 	}
 	if mission.Kind != "projecthub.full_cycle" {
-		state, err := requireCanonicalProjectHub(cfg, r)
-		if err != nil {
-			return err
-		}
-		if strings.ToLower(strings.TrimSpace(state.Head)) != target {
-			return fmt.Errorf("canonical checkout does not match authorized target: authorized=%s head=%s", target, state.Head)
-		}
+		return ensureCanonicalCheckoutAtTarget(cfg, mission, r)
+	}
+	return nil
+}
+
+func ensureCanonicalCheckoutAtTarget(cfg Config, mission Mission, r runner) error {
+	target := strings.ToLower(strings.TrimSpace(mission.TargetCommit))
+	if target == "" {
+		return nil
+	}
+	state, err := requireCanonicalProjectHub(cfg, r)
+	if err != nil {
+		return err
+	}
+	if strings.ToLower(strings.TrimSpace(state.Head)) != target {
+		return fmt.Errorf("canonical checkout does not match authorized target: authorized=%s head=%s", target, state.Head)
 	}
 	return nil
 }
