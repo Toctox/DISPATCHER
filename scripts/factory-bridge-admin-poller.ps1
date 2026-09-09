@@ -6,8 +6,10 @@ $root = Join-Path $env:LOCALAPPDATA 'FactoryBridge'
 $stateDir = Join-Path $root 'state'
 $adminDir = Join-Path $root 'admin'
 $pollerStatePath = Join-Path $stateDir 'admin-poller.json'
+$healthPath = Join-Path $stateDir 'admin-poller-health.json'
 $requestPath = Join-Path $stateDir 'self-update-request.json'
 $resultPath = Join-Path $stateDir 'self-update-result.json'
+$pendingPublishPath = Join-Path $stateDir 'admin-poller-pending-update-result.json'
 $updater = Join-Path $adminDir 'factory-bridge-autoupdate.ps1'
 $protocol = 'FACTORY_ADMIN_V1'
 $marker = '<!-- FACTORY_ADMIN_V1 -->'
@@ -17,6 +19,23 @@ $issue = 7
 $api = 'https://api.github.com'
 
 New-Item -ItemType Directory -Path $stateDir,$adminDir -Force | Out-Null
+
+function Write-JsonAtomic([string]$Path, $Value) {
+    $tmp = $Path + '.tmp'
+    [System.IO.File]::WriteAllText($tmp, ($Value | ConvertTo-Json -Depth 10), (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
+function Write-Health([string]$Status, [string]$Message, [Int64]$LastSuccessfulCommentId) {
+    $health = [ordered]@{
+        status = $Status
+        message = $Message
+        observedAt = (Get-Date).ToUniversalTime().ToString('o')
+        lastSuccessfulApprovalId = $LastSuccessfulCommentId
+        pendingUpdateResult = (Test-Path -LiteralPath $pendingPublishPath -PathType Leaf)
+    }
+    Write-JsonAtomic -Path $healthPath -Value $health
+}
 
 function Get-GitHubCredential {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -51,7 +70,7 @@ function Get-Headers([string]$Token) {
         Accept = 'application/vnd.github+json'
         Authorization = "Bearer $Token"
         'X-GitHub-Api-Version' = '2022-11-28'
-        'User-Agent' = 'FactoryBridge-Admin-Poller/1'
+        'User-Agent' = 'FactoryBridge-Admin-Poller/2'
     }
 }
 
@@ -60,7 +79,9 @@ function Get-Comments([string]$Token) {
     for ($page = 1; $page -le 20; $page++) {
         $uri = "$api/repos/$repo/issues/$issue/comments?per_page=100&page=$page"
         $items = @(Invoke-RestMethod -Method Get -Uri $uri -Headers (Get-Headers $Token) -TimeoutSec 20)
-        $all += $items
+        foreach ($item in $items) {
+            if ($null -ne $item -and $null -ne $item.id) { $all += $item }
+        }
         if ($items.Count -lt 100) { break }
     }
     return $all
@@ -91,11 +112,11 @@ function Write-PollerState([Int64]$CommentId, [string]$ApprovalId, [string]$Targ
         targetCommit = $TargetCommit
         updatedAt = (Get-Date).ToUniversalTime().ToString('o')
     }
-    [System.IO.File]::WriteAllText($pollerStatePath, ($state | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    Write-JsonAtomic -Path $pollerStatePath -Value $state
 }
 
-function Publish-UpdateResult([string]$Token, $Approval, $Result) {
-    $envelope = [ordered]@{
+function New-UpdateEnvelope($Approval, $Result) {
+    return [ordered]@{
         protocol = 'FACTORY_BUS_V2'
         type = 'UPDATE_RESULT'
         id = [string]$Approval.id
@@ -104,13 +125,32 @@ function Publish-UpdateResult([string]$Token, $Approval, $Result) {
         commit = [string]$Result.targetCommit
         observedAt = (Get-Date).ToUniversalTime().ToString('o')
     }
-    $body = "<!-- FACTORY_BUS_V2 -->`n```json`n" + ($envelope | ConvertTo-Json -Depth 8) + "`n```"
+}
+
+function Publish-UpdateEnvelope([string]$Token, $Envelope) {
+    $body = "<!-- FACTORY_BUS_V2 -->`n```json`n" + ($Envelope | ConvertTo-Json -Depth 8) + "`n```"
     $uri = "$api/repos/$repo/issues/$issue/comments"
     Invoke-RestMethod -Method Post -Uri $uri -Headers (Get-Headers $Token) -ContentType 'application/json' -Body (@{body=$body} | ConvertTo-Json -Compress) -TimeoutSec 20 | Out-Null
 }
 
+function Retry-PendingUpdateResult([string]$Token) {
+    if (-not (Test-Path -LiteralPath $pendingPublishPath -PathType Leaf)) { return $true }
+    try {
+        $pending = Get-Content -LiteralPath $pendingPublishPath -Raw | ConvertFrom-Json
+        Publish-UpdateEnvelope -Token $Token -Envelope $pending
+        Remove-Item -LiteralPath $pendingPublishPath -Force
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
 function Parse-Approval($Comment, [Int64]$LastSuccessfulCommentId) {
-    if ([Int64]$Comment.id -le $LastSuccessfulCommentId) { return $null }
+    $commentIdText = [string]$Comment.id
+    [Int64]$commentId = 0
+    if (-not [Int64]::TryParse($commentIdText, [ref]$commentId)) { return $null }
+    if ($commentId -le $LastSuccessfulCommentId) { return $null }
     if ([string]$Comment.user.login -cne $trustedAuthor) { return $null }
     $body = [string]$Comment.body
     if (-not $body.Contains($marker)) { return $null }
@@ -140,7 +180,7 @@ function Parse-Approval($Comment, [Int64]$LastSuccessfulCommentId) {
     if (-not [string]::Equals(([string]$a.payloadHash).Trim(), $want, [StringComparison]::OrdinalIgnoreCase)) { return $null }
 
     return [pscustomobject]@{
-        commentId = [Int64]$Comment.id
+        commentId = $commentId
         id = $id
         action = 'bridge.self_update'
         targetCommit = $target
@@ -150,36 +190,66 @@ function Parse-Approval($Comment, [Int64]$LastSuccessfulCommentId) {
     }
 }
 
-$token = Get-GitHubCredential
-$state = Read-PollerState
-$lastSuccessful = [Int64]$state.lastSuccessfulApprovalId
-$comments = @(Get-Comments -Token $token | Sort-Object {[Int64]$_.id})
-$approval = $null
-foreach ($comment in $comments) {
-    $candidate = Parse-Approval -Comment $comment -LastSuccessfulCommentId $lastSuccessful
-    if ($null -ne $candidate) { $approval = $candidate }
-}
-if ($null -eq $approval) { exit 0 }
-if (-not (Test-Path -LiteralPath $updater -PathType Leaf)) { throw "fixed updater not installed: $updater" }
+$lastSuccessful = [Int64]0
+try {
+    $token = Get-GitHubCredential
+    $state = Read-PollerState
+    [Int64]::TryParse(([string]$state.lastSuccessfulApprovalId), [ref]$lastSuccessful) | Out-Null
 
-$request = [ordered]@{
-    id = $approval.id
-    action = $approval.action
-    targetCommit = $approval.targetCommit
-    issuedAt = $approval.issuedAt
-    expiresAt = $approval.expiresAt
-    payloadHash = $approval.payloadHash
-    sourceCommentId = $approval.commentId
-}
-[System.IO.File]::WriteAllText($requestPath, ($request | ConvertTo-Json -Depth 8), (New-Object System.Text.UTF8Encoding($false)))
+    if (-not (Retry-PendingUpdateResult -Token $token)) {
+        Write-Health -Status 'DEGRADED' -Message 'pending UPDATE_RESULT could not be published; will retry next poll' -LastSuccessfulCommentId $lastSuccessful
+    }
 
-& powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $updater
-$updateExit = $LASTEXITCODE
-if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) { throw 'self-update result was not produced' }
-$result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-try { Publish-UpdateResult -Token $token -Approval $approval -Result $result } catch { }
-if ($updateExit -eq 0 -and ([string]$result.state -eq 'DONE' -or [string]$result.state -eq 'NOOP')) {
-    Write-PollerState -CommentId $approval.commentId -ApprovalId $approval.id -TargetCommit $approval.targetCommit
-    exit 0
+    $comments = @(Get-Comments -Token $token | Sort-Object { [Int64]([string]$_.id) })
+    $approval = $null
+    foreach ($comment in $comments) {
+        $candidate = Parse-Approval -Comment $comment -LastSuccessfulCommentId $lastSuccessful
+        if ($null -ne $candidate) { $approval = $candidate }
+    }
+
+    if ($null -eq $approval) {
+        Write-Health -Status 'OK' -Message 'poll completed; no new valid self-update approval' -LastSuccessfulCommentId $lastSuccessful
+        exit 0
+    }
+    if (-not (Test-Path -LiteralPath $updater -PathType Leaf)) { throw "fixed updater not installed: $updater" }
+
+    $request = [ordered]@{
+        id = $approval.id
+        action = $approval.action
+        targetCommit = $approval.targetCommit
+        issuedAt = $approval.issuedAt
+        expiresAt = $approval.expiresAt
+        payloadHash = $approval.payloadHash
+        sourceCommentId = $approval.commentId
+    }
+    Write-JsonAtomic -Path $requestPath -Value $request
+
+    & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $updater
+    $updateExit = $LASTEXITCODE
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) { throw 'self-update result was not produced' }
+    $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+
+    $envelope = New-UpdateEnvelope -Approval $approval -Result $result
+    Write-JsonAtomic -Path $pendingPublishPath -Value $envelope
+    try {
+        Publish-UpdateEnvelope -Token $token -Envelope $envelope
+        Remove-Item -LiteralPath $pendingPublishPath -Force
+    }
+    catch {
+        # Keep the durable pending envelope and retry on the next poll.
+    }
+
+    if ($updateExit -eq 0 -and ([string]$result.state -eq 'DONE' -or [string]$result.state -eq 'NOOP')) {
+        Write-PollerState -CommentId $approval.commentId -ApprovalId $approval.id -TargetCommit $approval.targetCommit
+        $lastSuccessful = $approval.commentId
+        Write-Health -Status 'OK' -Message ("self-update processed: " + [string]$result.state) -LastSuccessfulCommentId $lastSuccessful
+        exit 0
+    }
+
+    Write-Health -Status 'ERROR' -Message ("self-update failed with state=" + [string]$result.state + " exit=" + [string]$updateExit) -LastSuccessfulCommentId $lastSuccessful
+    exit $updateExit
 }
-exit $updateExit
+catch {
+    try { Write-Health -Status 'ERROR' -Message $_.Exception.Message -LastSuccessfulCommentId $lastSuccessful } catch { }
+    throw
+}
