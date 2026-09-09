@@ -66,10 +66,17 @@ func validateMissionIntegrity(m Mission) error {
 	default:
 		return fmt.Errorf("unsupported mission kind: %s", m.Kind)
 	}
-
-	hardened := strings.TrimSpace(m.TargetCommit) != "" || strings.TrimSpace(m.IssuedAt) != "" || strings.TrimSpace(m.ExpiresAt) != "" || strings.TrimSpace(m.PayloadHash) != ""
-	if !hardened {
-		return nil
+	if strings.TrimSpace(m.TargetCommit) == "" {
+		return errors.New("targetCommit is required")
+	}
+	if strings.TrimSpace(m.IssuedAt) == "" {
+		return errors.New("issuedAt is required")
+	}
+	if strings.TrimSpace(m.ExpiresAt) == "" {
+		return errors.New("expiresAt is required")
+	}
+	if strings.TrimSpace(m.PayloadHash) == "" {
+		return errors.New("payloadHash is required")
 	}
 	commit := strings.TrimSpace(m.TargetCommit)
 	if len(commit) != 40 {
@@ -174,6 +181,9 @@ func setMissionControl(id, action string) error {
 	default:
 		return fmt.Errorf("unsupported mission control action: %s", action)
 	}
+	if current := readMissionControl(id); current == "CANCEL" && action != "CANCEL" {
+		return errors.New("mission cancellation is terminal")
+	}
 	path, err := missionControlPath(id)
 	if err != nil {
 		return err
@@ -236,9 +246,6 @@ func interruptedMissionJournals() ([]missionJournal, error) {
 
 func ensureMissionTargetCommit(cfg Config, mission Mission, r runner) error {
 	target := strings.ToLower(strings.TrimSpace(mission.TargetCommit))
-	if target == "" {
-		return nil
-	}
 	workDir, err := projectHubWorkDir(cfg)
 	if err != nil {
 		return err
@@ -264,9 +271,6 @@ func ensureMissionTargetCommit(cfg Config, mission Mission, r runner) error {
 
 func ensureCanonicalCheckoutAtTarget(cfg Config, mission Mission, r runner) error {
 	target := strings.ToLower(strings.TrimSpace(mission.TargetCommit))
-	if target == "" {
-		return nil
-	}
 	state, err := requireCanonicalProjectHub(cfg, r)
 	if err != nil {
 		return err
