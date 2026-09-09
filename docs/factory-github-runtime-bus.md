@@ -1,6 +1,6 @@
 # FactoryBridge — GitHub Runtime Bus
 
-Status: **PRIMARY / migration complete**
+Status: **PRIMARY / migration complete / post-migration proof passed**
 
 ## Objective
 
@@ -90,7 +90,7 @@ Before re-running a mission after a transient GitHub write failure/restart, it c
 
 The rollout gate passed on 2026-09-09.
 
-### Proof 1 — verify
+### Proof 1 — verify before detachment
 
 `M-BUS-SMOKE-20260909-001`
 
@@ -101,15 +101,30 @@ The rollout gate passed on 2026-09-09.
 - validated ProjectHub commit: `6494e7b51aae694f4559f836199cb78212976edc`.
 - local execution duration: 30,440 ms.
 
-### Proof 2 — full cycle
+### Proof 2 — full cycle before detachment
 
 `M-BUS-FULL-20260909-001`
 
-- MISSION/ACK traveled only through Issue #7.
+- MISSION/ACK traveled through Issue #7.
 - local cycle completed sync → verify → showcase publish → local smoke.
 - CHECKPOINT returned `DONE`.
 - validated ProjectHub commit: `6494e7b51aae694f4559f836199cb78212976edc`.
 - local execution duration: 34,043 ms.
+
+### Proof 3 — full cycle after Drive detachment
+
+`M-BUS-POSTMIGRATE-20260909-001`
+
+This is the decisive migration proof. At this point the legacy Drive operational directories had already been removed and `bridgeRoot` had been relocated to the local mailbox.
+
+- ChatGPT posted MISSION through Issue #7 only.
+- local FactoryBridge returned ACK.
+- local cycle completed sync → verify → showcase publish → local smoke.
+- CHECKPOINT returned `DONE`.
+- validated ProjectHub commit: `6494e7b51aae694f4559f836199cb78212976edc`.
+- local execution duration: 26,176 ms.
+
+Therefore normal brain↔motor execution no longer depends on Google Drive synchronization.
 
 ## Drive detachment
 
@@ -119,7 +134,7 @@ The runtime configuration was migrated from the synchronized Google Drive root t
 
 The legacy Drive operational directories (`00_STATUS`, `01_COMMANDS`, `01_INBOX`, `02_OUTBOX`, `02_RESULTS`, `03_ARCHIVE`) and old executable/build/log artifacts were removed after the new local root was activated.
 
-The Drive keeps only compact brain/documentation material plus explicit recovery/bootstrap files.
+The Drive keeps only compact brain/documentation material plus explicit recovery/bootstrap files. The obsolete Cloudflare quick-tunnel URL and redundant legacy v0.13 recovery launcher were also removed after the stable Tailscale path and canonical recovery script were confirmed.
 
 ## Recovery
 
