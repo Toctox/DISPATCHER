@@ -116,9 +116,13 @@ func executeScriptRun(cfg Config, m Mission, start time.Time, r runner) (res Res
 	if err != nil || !strings.EqualFold(head, m.TargetCommit) {
 		return blocked(errors.New("script workspace commit mismatch"))
 	}
+	workspaceReal, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return blocked(errors.New("script workspace cannot be canonicalized"))
+	}
 	script := filepath.Join(workspace, filepath.FromSlash(req.Script))
 	real, err := filepath.EvalSymlinks(script)
-	if err != nil || !withinRoot(real, workspace) {
+	if err != nil || !withinRoot(real, workspaceReal) {
 		return blocked(errors.New("script path escapes workspace or is missing"))
 	}
 	// Arguments are serialized as data and consumed by a fixed wrapper, never
@@ -151,8 +155,8 @@ if($LASTEXITCODE){exit $LASTEXITCODE}
 	res.LogicalCommand = m.Kind + " " + req.Repo + ":" + req.Script
 	res.Meta["sourceCommit"] = m.TargetCommit
 	res.Meta["argumentNames"] = names
-	res.Meta["workingDir"] = workspace
-	stdout, stderr, code, runErr := r.Run(ctx, runSpec{exe: "powershell.exe", args: []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-File", wrapper, "-ScriptPath", real, "-ArgumentsPath", argsPath}, dir: workspace, logical: res.LogicalCommand})
+	res.Meta["workingDir"] = workspaceReal
+	stdout, stderr, code, runErr := r.Run(ctx, runSpec{exe: "powershell.exe", args: []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-File", wrapper, "-ScriptPath", real, "-ArgumentsPath", argsPath}, dir: workspaceReal, logical: res.LogicalCommand})
 	res.Stdout, res.Stderr, res.ExitCode = stdout, stderr, &code
 	if runErr != nil || code != 0 {
 		res.Status = "failed"
