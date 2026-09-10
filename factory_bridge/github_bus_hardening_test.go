@@ -111,7 +111,9 @@ func TestControlMessageCanCancelKnownMission(t *testing.T) {
 	defer server.Close()
 	githubAPIBase = server.URL
 
-	processed, err := processGitHubControl("token", githubBusEnvelope{Protocol: githubBusProtocol, Type: "CONTROL", ID: m.ID, Action: "CANCEL"})
+	envelope := githubBusEnvelope{Protocol: githubBusProtocol, Type: "CONTROL", ID: m.ID, Action: "CANCEL", ControlID: "C-1", ControlSequence: 1, IssuedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}
+	envelope.PayloadHash = controlPayloadHash(envelope)
+	processed, err := processGitHubControl("token", envelope)
 	if err != nil || !processed {
 		t.Fatalf("control failed processed=%t err=%v", processed, err)
 	}

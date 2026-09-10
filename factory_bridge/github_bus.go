@@ -31,22 +31,28 @@ const (
 var githubAPIBase = "https://api.github.com"
 
 type githubBusEnvelope struct {
-	Protocol      string `json:"protocol"`
-	Type          string `json:"type"`
-	ID            string `json:"id"`
-	Kind          string `json:"kind,omitempty"`
-	Objective     string `json:"objective,omitempty"`
-	TargetCommit  string `json:"targetCommit,omitempty"`
-	IssuedAt      string `json:"issuedAt,omitempty"`
-	ExpiresAt     string `json:"expiresAt,omitempty"`
-	PayloadHash   string `json:"payloadHash,omitempty"`
-	Action        string `json:"action,omitempty"`
-	State         string `json:"state,omitempty"`
-	Summary       string `json:"summary,omitempty"`
-	Commit        string `json:"commit,omitempty"`
-	DurationMs    int64  `json:"durationMs,omitempty"`
-	BridgeVersion string `json:"bridgeVersion,omitempty"`
-	ObservedAt    string `json:"observedAt,omitempty"`
+	RuntimeIdentity
+	EventID         string `json:"eventId,omitempty"`
+	Sequence        uint64 `json:"sequence,omitempty"`
+	Attempt         uint64 `json:"attempt,omitempty"`
+	ControlID       string `json:"controlId,omitempty"`
+	ControlSequence uint64 `json:"controlSequence,omitempty"`
+	Protocol        string `json:"protocol"`
+	Type            string `json:"type"`
+	ID              string `json:"id"`
+	Kind            string `json:"kind,omitempty"`
+	Objective       string `json:"objective,omitempty"`
+	TargetCommit    string `json:"targetCommit,omitempty"`
+	IssuedAt        string `json:"issuedAt,omitempty"`
+	ExpiresAt       string `json:"expiresAt,omitempty"`
+	PayloadHash     string `json:"payloadHash,omitempty"`
+	Action          string `json:"action,omitempty"`
+	State           string `json:"state,omitempty"`
+	Summary         string `json:"summary,omitempty"`
+	Commit          string `json:"commit,omitempty"`
+	DurationMs      int64  `json:"durationMs,omitempty"`
+	BridgeVersion   string `json:"bridgeVersion,omitempty"`
+	ObservedAt      string `json:"observedAt,omitempty"`
 }
 
 type githubIssueComment struct {
@@ -179,7 +185,7 @@ func githubBusCommentsEndpoint(state githubBusState, page int) string {
 
 func listGitHubBusComments(token string, state githubBusState) ([]githubIssueComment, error) {
 	comments := []githubIssueComment{}
-	for page := 1; page <= 20; page++ {
+	for page := 1; ; page++ {
 		resp, err := githubBusRequest(token, http.MethodGet, githubBusCommentsEndpoint(state, page), nil)
 		if err != nil {
 			return nil, err
@@ -204,7 +210,7 @@ func listGitHubBusComments(token string, state githubBusState) ([]githubIssueCom
 	return comments, nil
 }
 
-func postGitHubBusEnvelope(token string, envelope githubBusEnvelope) error {
+func sendGitHubBusEnvelope(token string, envelope githubBusEnvelope) error {
 	envelope.Protocol = githubBusProtocol
 	envelope.Summary = sanitizeRemoteText(envelope.Summary)
 	if envelope.ObservedAt == "" {
@@ -277,27 +283,33 @@ func existingMissionCheckpoint(id string) (*MissionCheckpoint, bool) {
 }
 
 func checkpointEnvelope(cp MissionCheckpoint) githubBusEnvelope {
+	if cp.SourceCommit == "" {
+		cp.RuntimeIdentity = RuntimeIdentity{"unknown-legacy", "unknown-legacy", githubBusProtocol, "unknown-legacy"}
+	}
 	return githubBusEnvelope{
-		Type:          "CHECKPOINT",
-		ID:            cp.MissionID,
-		Kind:          cp.Kind,
-		State:         cp.State,
-		Summary:       remoteCheckpointSummary(cp.Summary),
-		Commit:        cp.Commit,
-		DurationMs:    cp.DurationMs,
-		BridgeVersion: cp.BridgeVersion,
+		RuntimeIdentity: cp.RuntimeIdentity,
+		ObservedAt:      cp.FinishedAt,
+		Type:            "CHECKPOINT",
+		ID:              cp.MissionID,
+		Kind:            cp.Kind,
+		State:           cp.State,
+		Summary:         remoteCheckpointSummary(cp.Summary),
+		Commit:          cp.Commit,
+		DurationMs:      cp.DurationMs,
+		BridgeVersion:   cp.BridgeVersion,
 	}
 }
 
 func blockedEnvelope(mission Mission, summary string) githubBusEnvelope {
 	return checkpointEnvelope(MissionCheckpoint{
-		MissionID:     mission.ID,
-		Kind:          mission.Kind,
-		State:         "BLOCKED",
-		StartedAt:     time.Now().Format(time.RFC3339),
-		FinishedAt:    time.Now().Format(time.RFC3339),
-		Summary:       summary,
-		BridgeVersion: bridgeVersion,
+		RuntimeIdentity: currentRuntimeIdentity(),
+		MissionID:       mission.ID,
+		Kind:            mission.Kind,
+		State:           "BLOCKED",
+		StartedAt:       time.Now().Format(time.RFC3339),
+		FinishedAt:      time.Now().Format(time.RFC3339),
+		Summary:         summary,
+		BridgeVersion:   bridgeVersion,
 	})
 }
 
@@ -312,16 +324,10 @@ func processGitHubControl(token string, envelope githubBusEnvelope) (bool, error
 	if envelope.Protocol != githubBusProtocol {
 		return true, nil
 	}
-	if !idPattern.MatchString(envelope.ID) {
-		return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, State: "BLOCKED", Summary: "invalid mission id", BridgeVersion: bridgeVersion})
+	if err := applyControlV2(envelope, time.Now().UTC()); err != nil {
+		return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, ControlID: envelope.ControlID, ControlSequence: envelope.ControlSequence, State: "BLOCKED", Summary: err.Error(), BridgeVersion: bridgeVersion})
 	}
-	if _, err := readMissionJournal(envelope.ID); err != nil {
-		return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, State: "BLOCKED", Summary: "mission is not known locally", BridgeVersion: bridgeVersion})
-	}
-	if err := setMissionControl(envelope.ID, envelope.Action); err != nil {
-		return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, State: "BLOCKED", Summary: err.Error(), BridgeVersion: bridgeVersion})
-	}
-	return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, State: strings.ToUpper(strings.TrimSpace(envelope.Action)), Summary: "Mission control state updated.", BridgeVersion: bridgeVersion})
+	return true, postGitHubBusEnvelope(token, githubBusEnvelope{Type: "CONTROL_ACK", ID: envelope.ID, ControlID: envelope.ControlID, ControlSequence: envelope.ControlSequence, State: envelope.Action, Summary: "Control durably accepted.", BridgeVersion: bridgeVersion})
 }
 
 func processGitHubBusComment(cfg Config, token string, comment githubIssueComment) (bool, error) {
@@ -406,12 +412,11 @@ func recoverInterruptedGitHubMissions(token string) {
 		mission := journal.Mission
 		if cp, ok := existingMissionCheckpoint(mission.ID); ok {
 			_ = markMissionJournalState(mission.ID, cp.State)
-			if token != "" {
-				_ = postGitHubBusEnvelope(token, checkpointEnvelope(*cp))
-			}
+			_ = postGitHubBusEnvelope(token, checkpointEnvelope(*cp))
 			continue
 		}
 		cp := MissionCheckpoint{
+			RuntimeIdentity:  currentRuntimeIdentity(),
 			MissionID:        mission.ID,
 			Kind:             mission.Kind,
 			State:            "NEEDS_BRAIN",
@@ -426,16 +431,18 @@ func recoverInterruptedGitHubMissions(token string) {
 			_ = writeMissionEvidence(dir, missionEvidence{Mission: mission, Checkpoint: cp, Results: map[string]Result{}, Notes: []string{"Recovered fail-closed after runtime restart."}})
 		}
 		_ = markMissionJournalState(mission.ID, cp.State)
-		if token != "" {
-			_ = postGitHubBusEnvelope(token, checkpointEnvelope(cp))
-		}
+		_ = postGitHubBusEnvelope(token, checkpointEnvelope(cp))
 	}
 }
 
 func pollGitHubBusOnce(cfg Config) error {
+	if err := reconcileTerminalOutbox(); err != nil { return err }
 	_, token, credentialErr := githubCredential(cfg)
 	if credentialErr != nil {
 		token = ""
+	}
+	if err := flushGitHubOutbox(token); err != nil {
+		fmt.Fprintf(os.Stderr, "github outbound retry pending: %s\n", sanitizeRemoteText(err.Error()))
 	}
 	state := readGitHubBusState()
 	comments, err := listGitHubBusComments(token, state)

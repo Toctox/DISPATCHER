@@ -26,6 +26,12 @@ func factoryBridgeInstalledStatePath() (string, error) {
 }
 
 func ensureFactoryBridgeInstalledCommit(mission Mission) error {
+	if actual := runtimeSourceCommit(); actual != "development" {
+		if !strings.EqualFold(actual, strings.TrimSpace(mission.TargetCommit)) {
+			return fmt.Errorf("running FactoryBridge does not match authorized target: authorized=%s running=%s", mission.TargetCommit, actual)
+		}
+		return nil
+	}
 	path, err := factoryBridgeInstalledStatePath()
 	if err != nil {
 		return err

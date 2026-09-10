@@ -35,9 +35,9 @@ type systemCommandRiskRule struct {
 }
 
 var forbiddenSystemCommandRules = []systemCommandRiskRule{
-	{Name: "disk-format", Reason: "disk formatting or partition destruction is never executed automatically", Pattern: regexp.MustCompile(`(?i)\b(format(?:\.com)?\s+[a-z]:|diskpart(?:\.exe)?\b|clear-disk\b|remove-partition\b|initialize-disk\b)`)} ,
+	{Name: "disk-format", Reason: "disk formatting or partition destruction is never executed automatically", Pattern: regexp.MustCompile(`(?i)\b(format(?:\.com)?\s+[a-z]:|diskpart(?:\.exe)?\b|clear-disk\b|remove-partition\b|initialize-disk\b)`)},
 	{Name: "security-disable", Reason: "disabling endpoint security is never executed automatically", Pattern: regexp.MustCompile(`(?i)\b(set-mppreference\b[^\r\n;|]*(disable(realtime|behavior|ioav|script)monitoring|disableintrusionpreventionsystem)|add-mppreference\b[^\r\n;|]*-exclusion(path|process|extension))`)},
-	{Name: "credential-dump", Reason: "credential or LSASS extraction is never executed automatically", Pattern: regexp.MustCompile(`(?i)\b(mimikatz|sekurlsa|procdump(?:\.exe)?\b[^\r\n;|]*\blsass\b|reg(?:\.exe)?\s+save\s+hklm\\(sam|security|system)\b)`)} ,
+	{Name: "credential-dump", Reason: "credential or LSASS extraction is never executed automatically", Pattern: regexp.MustCompile(`(?i)\b(mimikatz|sekurlsa|procdump(?:\.exe)?\b[^\r\n;|]*\blsass\b|reg(?:\.exe)?\s+save\s+hklm\\(sam|security|system)\b)`)},
 	{Name: "obfuscated-execution", Reason: "obfuscated or dynamically evaluated command text is not accepted", Pattern: regexp.MustCompile(`(?i)(-encodedcommand\b|frombase64string\s*\(|\binvoke-expression\b|(^|[;&|]\s*)iex\s*[\s(])`)},
 	{Name: "critical-root-delete", Reason: "deleting a filesystem root is never executed automatically", Pattern: regexp.MustCompile(`(?i)(\bremove-item\b[^\r\n;|]{0,160}\b[a-z]:\\(?:[\s'\"]|$)|(^|[;&|]\s*)(rd|rmdir|del|erase)(?:\.exe)?\b[^\r\n;|]{0,160}\b[a-z]:\\(?:[\s'\"]|$))`)},
 }
@@ -213,7 +213,7 @@ func executeSystemCommand(cfg Config, mission Mission, start time.Time, r runner
 	res.Stdout, res.Stderr, res.ExitCode = stdout, stderr, &code
 	if runErr == nil && code == 0 {
 		res.Status = "ok"
-		res.Output = compact(strings.TrimSpace(stdout), 1200)
+		res.Output = tailCompact(sanitizeRemoteText(strings.TrimSpace(stdout)), 1200)
 		if res.Output == "" {
 			res.Output = fmt.Sprintf("Command completed successfully (risk=%s).", risk.Level)
 		}
