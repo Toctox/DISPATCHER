@@ -10,6 +10,7 @@ $healthPath = Join-Path $stateDir 'admin-poller-health.json'
 $requestPath = Join-Path $stateDir 'self-update-request.json'
 $resultPath = Join-Path $stateDir 'self-update-result.json'
 $pendingPublishPath = Join-Path $stateDir 'admin-poller-pending-update-result.json'
+$instanceLockPath = Join-Path $stateDir 'admin-poller.lock'
 $updater = Join-Path $adminDir 'factory-bridge-autoupdate.ps1'
 $protocol = 'FACTORY_ADMIN_V1'
 $marker = '<!-- FACTORY_ADMIN_V1 -->'
@@ -78,7 +79,9 @@ function Get-Comments([string]$Token) {
     $all = @()
     for ($page = 1; $page -le 20; $page++) {
         $uri = "$api/repos/$repo/issues/$issue/comments?per_page=100&page=$page"
-        $items = @(Invoke-RestMethod -Method Get -Uri $uri -Headers (Get-Headers $Token) -TimeoutSec 20)
+        $response = Invoke-RestMethod -Method Get -Uri $uri -Headers (Get-Headers $Token) -TimeoutSec 20
+        $items = @()
+        foreach ($entry in $response) { $items += $entry }
         foreach ($item in $items) {
             if ($null -ne $item -and $null -ne $item.id) { $all += $item }
         }
@@ -113,6 +116,20 @@ function Write-PollerState([Int64]$CommentId, [string]$ApprovalId, [string]$Targ
         updatedAt = (Get-Date).ToUniversalTime().ToString('o')
     }
     Write-JsonAtomic -Path $pollerStatePath -Value $state
+}
+
+function Acquire-InstanceLock {
+    try {
+        return [System.IO.File]::Open(
+            $instanceLockPath,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None
+        )
+    }
+    catch [System.IO.IOException] {
+        return $null
+    }
 }
 
 function New-UpdateEnvelope($Approval, $Result) {
@@ -191,6 +208,14 @@ function Parse-Approval($Comment, [Int64]$LastSuccessfulCommentId) {
 }
 
 $lastSuccessful = [Int64]0
+$instanceLock = Acquire-InstanceLock
+if ($null -eq $instanceLock) {
+    $state = Read-PollerState
+    [Int64]::TryParse(([string]$state.lastSuccessfulApprovalId), [ref]$lastSuccessful) | Out-Null
+    Write-Health -Status 'OK' -Message 'poll skipped; another admin poller instance is active' -LastSuccessfulCommentId $lastSuccessful
+    exit 0
+}
+
 try {
     $token = Get-GitHubCredential
     $state = Read-PollerState
@@ -252,4 +277,9 @@ try {
 catch {
     try { Write-Health -Status 'ERROR' -Message $_.Exception.Message -LastSuccessfulCommentId $lastSuccessful } catch { }
     throw
+}
+finally {
+    if ($null -ne $instanceLock) {
+        try { $instanceLock.Dispose() } catch { }
+    }
 }
