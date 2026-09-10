@@ -247,10 +247,10 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 			break
 		}
 		if command.Status != "ok" {
-			return fail("System command failed; stdout, stderr and risk classification were retained locally.", command)
+			return fail(systemCommandFailureSummary(command), command)
 		}
 		cp.State = "DONE"
-		cp.Summary = command.Output
+		cp.Summary = sanitizeRemoteText(command.Output)
 		if strings.TrimSpace(cp.Summary) == "" {
 			cp.Summary = "System command completed successfully."
 		}
