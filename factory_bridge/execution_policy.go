@@ -17,7 +17,7 @@ import (
 // privileged capability requiring a local HMAC, distinct from GitHub identity
 // and the public integrity digest. Regex risk classification is not a sandbox.
 var ordinaryRead = regexp.MustCompile(`(?i)^(Get-Date|Get-Location|Get-ChildItem|Write-Output [A-Za-z0-9_.-]+|Write-Output '[^'\r\n]*')$`)
-var ordinaryWrite = regexp.MustCompile(`(?i)^Set-Content -LiteralPath '([A-Za-z0-9_./\\-]+)' -Value '([^'\r\n]*)'$`)
+var ordinaryWrite = regexp.MustCompile(`(?i)^Set-Content -LiteralPath '([^'\r\n]+)' -Value '([^'\r\n]*)'$`)
 var indirectExecution = regexp.MustCompile(`(?i)(\.(ps1|cmd|bat|psm1)\b|\b(powershell|pwsh|cmd)(\.exe)?\b|\b(start-process|invoke-command|invoke-expression|add-type|invoke-cimmethod|invoke-wmimethod)\b|\[(System\.)?(Diagnostics|Reflection)|[&` + "`" + `]|\$\(|::)`)
 
 func withinRoot(path, root string) bool {
@@ -93,8 +93,12 @@ func ordinarySystemCommand(req systemCommandRequest, dir string) bool {
 	if !withinRoot(target, dir) {
 		return false
 	}
-	parent, err := filepath.EvalSymlinks(filepath.Dir(target))
-	if err != nil || !withinRoot(parent, dir) {
+	dirReal, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	parentReal, err := filepath.EvalSymlinks(filepath.Dir(target))
+	if err != nil || !withinRoot(parentReal, dirReal) {
 		return false
 	}
 	if info, err := os.Lstat(target); err == nil && info.Mode()&os.ModeSymlink != 0 {
