@@ -3,16 +3,13 @@ param()
 $ErrorActionPreference = 'Stop'
 $cfg = Get-Content (Join-Path $env:LOCALAPPDATA 'FactoryBridge\config.json') -Raw | ConvertFrom-Json
 $repo = [string]$cfg.dispatcherWorkDir
-$wt = Join-Path $env:LOCALAPPDATA 'FactoryNode\workspaces\FB-P0-apply'
+$wt = Join-Path $env:LOCALAPPDATA 'FactoryNode\workspaces\FB-P0-apply2'
 
 & git.exe -C $repo fetch origin feat/factorybridge-production-closure-p0
 if ($LASTEXITCODE -ne 0) { throw 'PHASE=fetch cause=git_fetch_failed' }
-if (-not (Test-Path $wt)) {
-    & git.exe -C $repo worktree add $wt origin/feat/factorybridge-production-closure-p0
-    if ($LASTEXITCODE -ne 0) { throw 'PHASE=worktree cause=create_failed' }
-}
-& git.exe -C $wt switch -C feat/factorybridge-production-closure-p0 --track origin/feat/factorybridge-production-closure-p0
-if ($LASTEXITCODE -ne 0) { throw 'PHASE=worktree cause=switch_failed' }
+if (Test-Path $wt) { throw 'PHASE=worktree cause=workspace_exists' }
+& git.exe -C $repo worktree add --detach $wt origin/feat/factorybridge-production-closure-p0
+if ($LASTEXITCODE -ne 0) { throw 'PHASE=worktree cause=create_failed' }
 
 $p = Join-Path $wt 'factory_bridge\mission_runtime.go'
 $s = [IO.File]::ReadAllText($p)
