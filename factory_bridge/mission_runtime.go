@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"encoding/json"
@@ -247,7 +247,7 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 			break
 		}
 		if command.Status != "ok" {
-			return fail("System command failed; stdout, stderr and risk classification were retained locally.", command)
+			return fail(systemCommandFailureSummary(command), command)
 		}
 		cp.State = "DONE"
 		cp.Summary = command.Output
@@ -264,12 +264,12 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 		cp.Steps = append(cp.Steps, missionStep("cafe-ccc-scan", scan))
 		cp.Commit = strings.ToLower(strings.TrimSpace(mission.TargetCommit))
 		if scan.Status != "ok" {
-			return fail("Café CCC/SVRS scan failed; local evidence and sanitized errors were retained.", scan)
+			return fail("CafÃ© CCC/SVRS scan failed; local evidence and sanitized errors were retained.", scan)
 		}
 		cp.State = "DONE"
 		cp.Summary = scan.Output
 		if strings.TrimSpace(cp.Summary) == "" {
-			cp.Summary = "Café CCC/SVRS scan completed successfully."
+			cp.Summary = "CafÃ© CCC/SVRS scan completed successfully."
 		}
 
 	case "projecthub.verify":
@@ -448,3 +448,4 @@ func init() {
 // Keep sort imported explicitly documented by the mission FIFO contract when
 // future mailbox ordering evolves independently from command ordering.
 var _ = sort.SliceStable
+
