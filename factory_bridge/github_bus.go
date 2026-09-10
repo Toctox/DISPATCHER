@@ -206,6 +206,7 @@ func listGitHubBusComments(token string, state githubBusState) ([]githubIssueCom
 
 func postGitHubBusEnvelope(token string, envelope githubBusEnvelope) error {
 	envelope.Protocol = githubBusProtocol
+	envelope.Summary = sanitizeRemoteText(envelope.Summary)
 	if envelope.ObservedAt == "" {
 		envelope.ObservedAt = time.Now().UTC().Format(time.RFC3339)
 	}
@@ -281,7 +282,7 @@ func checkpointEnvelope(cp MissionCheckpoint) githubBusEnvelope {
 		ID:            cp.MissionID,
 		Kind:          cp.Kind,
 		State:         cp.State,
-		Summary:       compact(cp.Summary, 800),
+		Summary:       remoteCheckpointSummary(cp.Summary),
 		Commit:        cp.Commit,
 		DurationMs:    cp.DurationMs,
 		BridgeVersion: cp.BridgeVersion,
