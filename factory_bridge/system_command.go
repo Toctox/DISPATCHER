@@ -5,19 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 )
 
 type systemCommandRequest struct {
-	Shell        string `json:"shell"`
-	Command      string `json:"command"`
-	WorkingDir   string `json:"workingDir,omitempty"`
-	RiskApproval string `json:"riskApproval,omitempty"`
-	TimeoutSec   int    `json:"timeoutSec,omitempty"`
+	LocalApproval string `json:"localApproval,omitempty"`
+	Shell         string `json:"shell"`
+	Command       string `json:"command"`
+	WorkingDir    string `json:"workingDir,omitempty"`
+	RiskApproval  string `json:"riskApproval,omitempty"`
+	TimeoutSec    int    `json:"timeoutSec,omitempty"`
 }
 
 type systemCommandRisk struct {
@@ -104,6 +103,9 @@ func decodeSystemCommandObjective(mission Mission) (systemCommandRequest, error)
 }
 
 func classifySystemCommand(command string) systemCommandRisk {
+	if indirectExecution.MatchString(command) {
+		return systemCommandRisk{Level: "forbidden", Rule: "indirect-execution", Reason: "indirect process/script execution requires an allowlisted exact-commit script mission", Forbidden: true}
+	}
 	for _, rule := range forbiddenSystemCommandRules {
 		if rule.Pattern.MatchString(command) {
 			return systemCommandRisk{Level: "forbidden", Rule: rule.Name, Reason: rule.Reason, Forbidden: true}
@@ -123,29 +125,7 @@ func classifySystemCommand(command string) systemCommandRisk {
 }
 
 func resolveSystemCommandWorkingDir(cfg Config, requested string) (string, error) {
-	dir := strings.TrimSpace(requested)
-	if dir == "" {
-		dir = strings.TrimSpace(cfg.DispatcherWorkDir)
-	}
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		dir = home
-	}
-	if !filepath.IsAbs(dir) && strings.TrimSpace(cfg.DispatcherWorkDir) != "" {
-		dir = filepath.Join(cfg.DispatcherWorkDir, dir)
-	}
-	dir = filepath.Clean(dir)
-	info, err := os.Stat(dir)
-	if err != nil {
-		return "", fmt.Errorf("workingDir unavailable: %w", err)
-	}
-	if !info.IsDir() {
-		return "", errors.New("workingDir is not a directory")
-	}
-	return dir, nil
+	return resolveExecutionRoot(cfg, requested)
 }
 
 func executeSystemCommand(cfg Config, mission Mission, start time.Time, r runner) Result {
@@ -186,6 +166,13 @@ func executeSystemCommand(cfg Config, mission Mission, start time.Time, r runner
 		return res
 	}
 	res.Meta["workingDir"] = dir
+	if !ordinarySystemCommand(req, dir) && !verifyPrivilegedMission(mission, req) {
+		res.Status = "blocked"
+		res.Error = "general system.command requires separate local HMAC authorization; use an allowlisted script.run for routine work"
+		res.Meta["requiresLocalApproval"] = true
+		finish(&res, start)
+		return res
+	}
 
 	timeout := req.TimeoutSec
 	if timeout == 0 {

@@ -63,7 +63,7 @@ func validateMissionIntegrity(m Mission) error {
 		return errors.New("invalid mission id")
 	}
 	switch m.Kind {
-	case "projecthub.verify", "projecthub.full_cycle", "projecthub.showcase", "cafe.ccc.scan", "system.command":
+	case "projecthub.verify", "projecthub.full_cycle", "projecthub.showcase", "cafe.ccc.scan", "system.command", "script.run", "repo.script":
 	default:
 		return fmt.Errorf("unsupported mission kind: %s", m.Kind)
 	}
@@ -316,6 +316,9 @@ func interruptedMissionJournals() ([]missionJournal, error) {
 }
 
 func ensureMissionTargetCommit(cfg Config, mission Mission, r runner) error {
+	if mission.Kind == "script.run" || mission.Kind == "repo.script" {
+		return nil
+	} // verified in isolated script checkout
 	if mission.Kind == "cafe.ccc.scan" || mission.Kind == "system.command" {
 		return ensureFactoryBridgeInstalledCommit(mission)
 	}
