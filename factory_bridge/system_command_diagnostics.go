@@ -15,20 +15,22 @@ type systemCommandDiagnosis struct {
 }
 
 var (
-	phaseMarkerPattern       = regexp.MustCompile(`(?i)PHASE=([A-Za-z0-9_.-]+)`)
-	secretValuePattern       = regexp.MustCompile(`(?i)(password|pgpassword|token|secret|authorization|api[_-]?key|access[_-]?key)\s*[=:]\s*([^;\s\r\n]+)`)
+	phaseMarkerPattern        = regexp.MustCompile(`(?i)PHASE=([A-Za-z0-9_.-]+)`)
+	secretValuePattern        = regexp.MustCompile(`(?i)(password|pgpassword|token|secret|authorization|api[_-]?key|access[_-]?key)\s*[=:]\s*([^;\s\r\n]+)`)
 	connectionPasswordPattern = regexp.MustCompile(`(?i)(Password\s*=\s*)[^;\r\n]+`)
-	bearerPattern            = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._~+/-]+=*`)
-	compileCodePattern       = regexp.MustCompile(`(?i)\b(CS\d{4}|xUnit\d{4})\b`)
+	bearerPattern             = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._~+/-]+=*`)
+	compileCodePattern        = regexp.MustCompile(`(?i)\b(CS\d{4}|xUnit\d{4})\b`)
 )
 
 func sanitizeRemoteText(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return ""
 	}
+	// Redact bearer credentials before the generic Authorization matcher so a
+	// token cannot survive as trailing text after the field value is replaced.
+	s = bearerPattern.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = connectionPasswordPattern.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = secretValuePattern.ReplaceAllString(s, `${1}=[REDACTED]`)
-	s = bearerPattern.ReplaceAllString(s, `${1}[REDACTED]`)
 	return s
 }
 
