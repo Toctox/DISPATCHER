@@ -235,11 +235,16 @@ func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 	}
 
 	switch mission.Kind {
-	case "system.command":
+	case "system.command", "script.run", "repo.script":
 		if err := waitForMissionPermission(mission.ID); err != nil {
 			return fail(err.Error(), Result{})
 		}
-		command := executeSystemCommand(cfg, mission, time.Now(), r)
+		var command Result
+		if mission.Kind == "system.command" {
+			command = executeSystemCommand(cfg, mission, time.Now(), r)
+		} else {
+			command = executeScriptRun(cfg, mission, time.Now(), r)
+		}
 		evidence.Results["system-command"] = command
 		cp.Steps = append(cp.Steps, missionStep("system-command", command))
 		cp.Commit = strings.ToLower(strings.TrimSpace(mission.TargetCommit))

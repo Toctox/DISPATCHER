@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +46,18 @@ func TestSystemCommandDeletionRequiresExplicitApproval(t *testing.T) {
 }
 
 func TestSystemCommandApprovedDeletionCanRun(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	mission := Mission{ID: "CMD-DELETE-2", Kind: "system.command", Objective: `{"shell":"powershell","command":"Remove-Item .\\old.txt -Force","riskApproval":"approved"}`}
+	req, err := decodeSystemCommandObjective(mission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.LocalApproval, err = privilegedMissionMAC(mission, req, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(req)
+	mission.Objective = string(body)
 	f := &fakeRunner{stdout: "removed\n", code: 0}
 	res := executeSystemCommand(Config{DispatcherWorkDir: t.TempDir(), CommandTimeoutSec: 10}, mission, time.Now(), f)
 	if res.Status != "ok" {

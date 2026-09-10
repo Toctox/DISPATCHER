@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-const bridgeVersion = "0.16.0"
+const bridgeVersion = "0.17.0"
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
