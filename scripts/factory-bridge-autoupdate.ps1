@@ -113,7 +113,7 @@ try {
         & $go.Source test ./...
         if ($LASTEXITCODE -ne 0) { throw 'go test ./... failed; existing runtime was not touched' }
         if (Test-Path -LiteralPath $nextExe) { Remove-Item -LiteralPath $nextExe -Force }
-        & $go.Source build -trimpath -ldflags '-s -w' -o $nextExe .
+        & $go.Source build -trimpath -ldflags ("-s -w -X main.buildSourceCommit=$target") -o $nextExe .
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $nextExe -PathType Leaf)) {
             throw 'go build failed; existing runtime was not touched'
         }

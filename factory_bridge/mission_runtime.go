@@ -39,6 +39,7 @@ type MissionStepEvidence struct {
 }
 
 type MissionCheckpoint struct {
+	RuntimeIdentity
 	MissionID         string                `json:"missionId"`
 	Kind              string                `json:"kind"`
 	State             string                `json:"state"`
@@ -75,6 +76,9 @@ func missionLocalRoot() (string, error) {
 }
 
 func missionLocalDir(id string) (string, error) {
+	if !idPattern.MatchString(id) {
+		return "", errors.New("invalid mission id")
+	}
 	root, err := missionLocalRoot()
 	if err != nil {
 		return "", err
@@ -175,12 +179,13 @@ func missionCommit(result Result) string {
 func executeMission(cfg Config, mission Mission, r runner) MissionCheckpoint {
 	started := time.Now()
 	cp := MissionCheckpoint{
-		MissionID:     mission.ID,
-		Kind:          mission.Kind,
-		State:         "RUNNING",
-		StartedAt:     started.Format(time.RFC3339),
-		Objective:     strings.TrimSpace(mission.Objective),
-		BridgeVersion: bridgeVersion,
+		RuntimeIdentity: currentRuntimeIdentity(),
+		MissionID:       mission.ID,
+		Kind:            mission.Kind,
+		State:           "RUNNING",
+		StartedAt:       started.Format(time.RFC3339),
+		Objective:       strings.TrimSpace(mission.Objective),
+		BridgeVersion:   bridgeVersion,
 	}
 	localDir, err := missionLocalDir(mission.ID)
 	if err != nil {

@@ -58,6 +58,7 @@ func TestParseGitCredentialOutput(t *testing.T) {
 }
 
 func TestGitHubBusHTTPReadAndWrite(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	oldBase := githubAPIBase
 	defer func() { githubAPIBase = oldBase }()
 

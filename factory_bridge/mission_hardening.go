@@ -17,6 +17,7 @@ import (
 const missionJournalFileName = "journal.json"
 
 var missionExecutionMu sync.Mutex
+var missionJournalMu sync.Mutex
 
 type missionJournal struct {
 	Mission     Mission `json:"mission"`
@@ -123,6 +124,9 @@ func missionJournalPath(id string) (string, error) {
 }
 
 func missionJournalReadPath(id string) (string, error) {
+	if !idPattern.MatchString(id) {
+		return "", errors.New("invalid mission id")
+	}
 	root, err := missionLocalRoot()
 	if err != nil {
 		return "", err
@@ -139,6 +143,8 @@ func readMissionJournal(id string) (*missionJournal, error) {
 }
 
 func reserveMission(m Mission) (*missionJournal, bool, error) {
+	missionJournalMu.Lock()
+	defer missionJournalMu.Unlock()
 	hash, err := missionPayloadHash(m)
 	if err != nil {
 		return nil, false, err
@@ -152,6 +158,8 @@ func reserveMission(m Mission) (*missionJournal, bool, error) {
 			return existing, false, errors.New("mission id was already reserved with a different payload")
 		}
 		return existing, false, nil
+	} else if readErr != nil && !os.IsNotExist(readErr) {
+		return nil, false, fmt.Errorf("mission journal unreadable; refusing replay: %w", readErr)
 	}
 	j := &missionJournal{
 		Mission:     m,
@@ -166,6 +174,8 @@ func reserveMission(m Mission) (*missionJournal, bool, error) {
 }
 
 func markMissionJournalState(id, state string) error {
+	missionJournalMu.Lock()
+	defer missionJournalMu.Unlock()
 	j, err := readMissionJournal(id)
 	if err != nil {
 		return err
@@ -213,6 +223,25 @@ func setMissionControl(id, action string) error {
 }
 
 func readMissionControl(id string) string {
+	if !idPattern.MatchString(id) {
+		return "CANCEL"
+	}
+	root, rootErr := missionLocalRoot()
+	if rootErr != nil {
+		return "CANCEL"
+	}
+	ledger, ledgerErr := readJSONFile[controlLedger](filepath.Join(root, id, "control-ledger.json"))
+	if ledgerErr == nil {
+		for _, receipt := range ledger.Receipts {
+			if receipt.Sequence == ledger.LastSequence {
+				return receipt.Action
+			}
+		}
+		return "CANCEL" // corrupt ledger never permits execution
+	}
+	if !os.IsNotExist(ledgerErr) {
+		return "CANCEL"
+	}
 	path, err := missionControlPath(id)
 	if err != nil {
 		return ""

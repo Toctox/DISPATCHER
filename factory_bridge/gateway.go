@@ -19,6 +19,7 @@ import (
 const gatewayListenAddress = "127.0.0.1:8787"
 
 type publicMissionCheckpoint struct {
+	RuntimeIdentity
 	MissionID     string `json:"missionId,omitempty"`
 	Kind          string `json:"kind,omitempty"`
 	State         string `json:"state"`
@@ -30,6 +31,7 @@ type publicMissionCheckpoint struct {
 }
 
 type publicRuntimeStatus struct {
+	RuntimeIdentity
 	OK                bool                     `json:"ok"`
 	BridgeVersion     string                   `json:"bridgeVersion"`
 	ExecutorOnline    bool                     `json:"executorOnline"`
@@ -91,14 +93,15 @@ func ensureGatewayToken() (string, error) {
 
 func sanitizeCheckpoint(cp MissionCheckpoint) publicMissionCheckpoint {
 	return publicMissionCheckpoint{
-		MissionID:     cp.MissionID,
-		Kind:          cp.Kind,
-		State:         cp.State,
-		StartedAt:     cp.StartedAt,
-		FinishedAt:    cp.FinishedAt,
-		DurationMs:    cp.DurationMs,
-		Commit:        cp.Commit,
-		BridgeVersion: cp.BridgeVersion,
+		RuntimeIdentity: cp.RuntimeIdentity,
+		MissionID:       cp.MissionID,
+		Kind:            cp.Kind,
+		State:           cp.State,
+		StartedAt:       cp.StartedAt,
+		FinishedAt:      cp.FinishedAt,
+		DurationMs:      cp.DurationMs,
+		Commit:          cp.Commit,
+		BridgeVersion:   cp.BridgeVersion,
 	}
 }
 
@@ -165,6 +168,7 @@ func runtimePublicStatus(cfg Config) publicRuntimeStatus {
 	now := time.Now()
 	executor, online := localExecutorSnapshot(now)
 	status := publicRuntimeStatus{
+		RuntimeIdentity:   currentRuntimeIdentity(),
 		OK:                online,
 		BridgeVersion:     bridgeVersion,
 		ExecutorOnline:    online,
@@ -262,10 +266,14 @@ func gatewayMux(cfg Config, token string) http.Handler {
 	mux.HandleFunc("GET /public/health", func(w http.ResponseWriter, r *http.Request) {
 		status := runtimePublicStatus(cfg)
 		writeGatewayJSON(w, http.StatusOK, map[string]any{
-			"ok":             status.OK,
-			"bridgeVersion":  status.BridgeVersion,
-			"executorOnline": status.ExecutorOnline,
-			"observedAt":     status.ObservedAt,
+			"ok":              status.OK,
+			"sourceCommit":    status.SourceCommit,
+			"binarySha256":    status.BinarySHA256,
+			"protocolVersion": status.ProtocolVersion,
+			"policyVersion":   status.PolicyVersion,
+			"bridgeVersion":   status.BridgeVersion,
+			"executorOnline":  status.ExecutorOnline,
+			"observedAt":      status.ObservedAt,
 		})
 	})
 	mux.HandleFunc("GET /public/attention", func(w http.ResponseWriter, r *http.Request) {
