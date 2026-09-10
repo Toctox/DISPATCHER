@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $cfg = Get-Content (Join-Path $env:LOCALAPPDATA 'FactoryBridge\config.json') -Raw | ConvertFrom-Json
 $repo = [string]$cfg.dispatcherWorkDir
-$wt = Join-Path $env:LOCALAPPDATA 'FactoryNode\workspaces\FB-P0-identity'
+$wt = Join-Path $env:LOCALAPPDATA 'FactoryNode\workspaces\FB-P0-identity-r5'
 $branch = 'feat/factorybridge-production-closure-p0-identity-script'
 
 function Replace-Required {
@@ -18,6 +18,20 @@ function Replace-Required {
         throw ('PHASE=patch cause=pattern_missing label=' + $Label)
     }
     return $Text.Replace($Old, $New)
+}
+
+function Replace-RegexRequired {
+    param(
+        [string]$Text,
+        [string]$Pattern,
+        [string]$Replacement,
+        [string]$Label
+    )
+    $rx = [regex]::new($Pattern)
+    if (-not $rx.IsMatch($Text)) {
+        throw ('PHASE=patch cause=pattern_missing label=' + $Label)
+    }
+    return $rx.Replace($Text, $Replacement, 1)
 }
 
 Write-Output 'PHASE=fetch'
@@ -53,27 +67,27 @@ $s = Replace-Required -Text $s -Old $old -New $new -Label 'github-envelope-ident
 
 $p = Join-Path $wt 'factory_bridge\gateway.go'
 $s = [IO.File]::ReadAllText($p)
-$old = 'BridgeVersion     string `json:"bridgeVersion"`'
-$new = ('BridgeVersion     string `json:"bridgeVersion"`' + "`r`n`t" +
-    'SourceCommit      string `json:"sourceCommit"`' + "`r`n`t" +
-    'BinarySHA256      string `json:"binarySha256"`' + "`r`n`t" +
-    'ProtocolVersion   string `json:"protocolVersion"`' + "`r`n`t" +
-    'PolicyVersion     string `json:"policyVersion"`')
-$s = Replace-Required -Text $s -Old $old -New $new -Label 'gateway-status-identity-fields'
-$old = 'BridgeVersion:     bridgeVersion,'
-$new = ('BridgeVersion:     bridgeVersion,' + "`r`n`t`t" +
-    'SourceCommit:      runtimeSourceCommit(),' + "`r`n`t`t" +
-    'BinarySHA256:      runningBinarySHA256(),' + "`r`n`t`t" +
-    'ProtocolVersion:   factoryBusProtocolVersion,' + "`r`n`t`t" +
-    'PolicyVersion:     factoryRiskPolicyVersion,')
-$s = Replace-Required -Text $s -Old $old -New $new -Label 'gateway-status-identity-values'
-$old = '"bridgeVersion":  status.BridgeVersion,'
-$new = ('"bridgeVersion":  status.BridgeVersion,' + "`r`n`t`t`t" +
-    '"sourceCommit":   status.SourceCommit,' + "`r`n`t`t`t" +
-    '"binarySha256":   status.BinarySHA256,' + "`r`n`t`t`t" +
-    '"protocolVersion": status.ProtocolVersion,' + "`r`n`t`t`t" +
-    '"policyVersion":  status.PolicyVersion,')
-$s = Replace-Required -Text $s -Old $old -New $new -Label 'gateway-private-status-identity-values'
+$pattern = '(?m)^([\t ]*)BridgeVersion[\t ]+string `json:"bridgeVersion"`[\t ]*$'
+$new = ('${1}BridgeVersion string `json:"bridgeVersion"`' + "`r`n" +
+    '${1}SourceCommit string `json:"sourceCommit"`' + "`r`n" +
+    '${1}BinarySHA256 string `json:"binarySha256"`' + "`r`n" +
+    '${1}ProtocolVersion string `json:"protocolVersion"`' + "`r`n" +
+    '${1}PolicyVersion string `json:"policyVersion"`')
+$s = Replace-RegexRequired -Text $s -Pattern $pattern -Replacement $new -Label 'gateway-status-identity-fields'
+$pattern = '(?m)^([\t ]*)BridgeVersion:[\t ]+bridgeVersion,[\t ]*$'
+$new = ('${1}BridgeVersion: bridgeVersion,' + "`r`n" +
+    '${1}SourceCommit: runtimeSourceCommit(),' + "`r`n" +
+    '${1}BinarySHA256: runningBinarySHA256(),' + "`r`n" +
+    '${1}ProtocolVersion: factoryBusProtocolVersion,' + "`r`n" +
+    '${1}PolicyVersion: factoryRiskPolicyVersion,')
+$s = Replace-RegexRequired -Text $s -Pattern $pattern -Replacement $new -Label 'gateway-status-identity-values'
+$pattern = '(?m)^([\t ]*)"bridgeVersion":[\t ]+status\.BridgeVersion,[\t ]*$'
+$new = ('${1}"bridgeVersion": status.BridgeVersion,' + "`r`n" +
+    '${1}"sourceCommit": status.SourceCommit,' + "`r`n" +
+    '${1}"binarySha256": status.BinarySHA256,' + "`r`n" +
+    '${1}"protocolVersion": status.ProtocolVersion,' + "`r`n" +
+    '${1}"policyVersion": status.PolicyVersion,')
+$s = Replace-RegexRequired -Text $s -Pattern $pattern -Replacement $new -Label 'gateway-private-status-identity-values'
 [IO.File]::WriteAllText($p, $s, (New-Object Text.UTF8Encoding($false)))
 
 $p = Join-Path $wt 'scripts\factory-bridge-autoupdate.ps1'
