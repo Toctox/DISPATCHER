@@ -77,7 +77,7 @@ def _read_text(path: Path, max_bytes: int = 5 * 1024 * 1024) -> str:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "FactoryLocalAgent/0.1"
+    server_version = "FactoryLocalAgent/0.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         line = f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {self.client_address[0]} {fmt % args}\n"
@@ -134,7 +134,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {
                 "ok": True,
                 "service": "factory-local-agent",
-                "version": "0.1",
+                "version": "0.2",
                 "pid": os.getpid(),
                 "host": HOST,
                 "port": PORT,
@@ -217,7 +217,7 @@ class Handler(BaseHTTPRequestHandler):
             text=True,
             errors="replace",
             timeout=timeout,
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+            creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)),
         )
         self._send(200, {
             "ok": completed.returncode == 0,
@@ -247,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
                 stdout=stdout_file,
                 stderr=stderr_file,
                 stdin=subprocess.DEVNULL,
-                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)),
             )
         finally:
             stdout_file.close()
@@ -272,7 +272,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("unknown process id")
         proc = item["process"]
         if proc.poll() is None:
-            subprocess.run(["taskkill.exe", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, text=True)
+            subprocess.run(["taskkill.exe", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self._send(200, {"ok": True, "id": task_id, "pid": proc.pid, "exitCode": proc.poll()})
 
     def _process_output(self, data: dict[str, Any]) -> None:
@@ -333,7 +333,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"Factory Local Agent listening on http://{HOST}:{PORT}", flush=True)
+    if getattr(__import__("sys"), "stdout", None):
+        print(f"Factory Local Agent listening on http://{HOST}:{PORT}", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     finally:

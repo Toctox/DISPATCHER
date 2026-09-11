@@ -1,17 +1,19 @@
 # Local Agent install recovery
 
-If the first bootstrap reports `Local agent did not become healthy on 127.0.0.1:8765`, use the current installer from `main`.
+If an older bootstrap reports that the Local Agent did not become healthy, use the current installer from `main`.
 
 The corrected installer:
 
 - actively qualifies a real Python 3 interpreter instead of trusting the Windows App Execution Alias;
-- compiles `local_agent/agent.py` before registration;
-- installs `FactoryNode Local Agent` as a per-user Windows Scheduled Task;
-- launches the persistent process outside transient FactoryBridge mission capture;
-- writes `%LOCALAPPDATA%\FactoryNode\local-agent\logs\agent.log`;
-- returns task result and the tail of that log on health failure;
+- requires the matching `pythonw.exe` so the persistent process has no console window;
+- compiles `local_agent/agent.py` before installation;
+- removes the legacy per-user Scheduled Task `FactoryNode Local Agent` when present;
+- removes the legacy visible `FactoryNode-Local-Agent.cmd` from Startup when present;
+- installs `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\FactoryNode-Local-Agent.vbs`;
+- launches `agent.py` through `pythonw.exe` with `FACTORY_LOCAL_AGENT_PORT=18765`;
+- validates `GET /health` on `127.0.0.1:18765`;
 - keeps the access token only in `%LOCALAPPDATA%\FactoryNode\local-agent\token.txt`.
 
-The service binds only to `127.0.0.1:8765`. Do not publish or commit the token file.
+The service binds only to `127.0.0.1:18765`. Do not publish or commit the token file.
 
-Manual bootstrap is intentionally supported when the GitHub Issue BUS is rate-limited. Git transport (`git fetch`) is independent of the REST API polling quota used by FactoryBridge.
+The VBS + `pythonw.exe` startup path is intentional: it avoids PowerShell/CMD windows stealing focus from the ChatGPT extension while preserving per-user automatic startup.
