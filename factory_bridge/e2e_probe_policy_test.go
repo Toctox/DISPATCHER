@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,24 +38,8 @@ func TestE2EProbePowerShellParses(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; [scriptblock]::Create([Console]::In.ReadToEnd()) | Out-Null")
-	cmd.Stdin = bytesReader(data)
+	cmd.Stdin = bytes.NewReader(data)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("probe parse failed: %v %s", err, out)
 	}
-}
-
-type byteSliceReader struct {
-	data []byte
-	off  int
-}
-
-func bytesReader(data []byte) *byteSliceReader { return &byteSliceReader{data: data} }
-
-func (r *byteSliceReader) Read(p []byte) (int, error) {
-	if r.off >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.data[r.off:])
-	r.off += n
-	return n, nil
 }
