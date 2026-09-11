@@ -53,8 +53,6 @@ func sanitizeRemoteText(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return ""
 	}
-	// Redact bearer credentials before the generic Authorization matcher so a
-	// token cannot survive as trailing text after the field value is replaced.
 	s = bearerPattern.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = connectionPasswordPattern.ReplaceAllString(s, `${1}[REDACTED]`)
 	s = secretValuePattern.ReplaceAllString(s, `${1}=[REDACTED]`)
@@ -103,14 +101,6 @@ func sanitizeFailureDiagnostic(in *FailureDiagnostic) *FailureDiagnostic {
 		out.TRX = &trx
 	}
 	return &out
-}
-
-func sanitizeOutboundEnvelope(envelope githubBusEnvelope) githubBusEnvelope {
-	// This is the single remote-publication redaction boundary. Anything added
-	// to an outbound envelope must pass through here before hashing or sending.
-	envelope.Summary = remoteCheckpointSummary(envelope.Summary)
-	envelope.Diagnostic = sanitizeFailureDiagnostic(envelope.Diagnostic)
-	return envelope
 }
 
 func systemCommandFailureSummary(res Result) string {
