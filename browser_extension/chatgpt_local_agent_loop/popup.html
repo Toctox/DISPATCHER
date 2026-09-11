@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Local Agent Loop</title>
+<style>
+body{font-family:system-ui,sans-serif;width:330px;padding:14px;background:#111;color:#eee}
+input,button{box-sizing:border-box;width:100%;margin:6px 0;padding:9px;border-radius:7px}
+input{background:#222;color:#eee;border:1px solid #555}
+button{cursor:pointer;border:0}
+.primary{background:#eee;color:#111}.danger{background:#5d2222;color:#fff}
+small,pre{white-space:pre-wrap;word-break:break-word;color:#bbb}
+</style>
+</head>
+<body>
+<h3>ChatGPT ↔ Local Agent</h3>
+<label>Token local</label>
+<input id="token" type="password" autocomplete="off" placeholder="cole token.txt somente aqui">
+<label>Porta</label>
+<input id="port" type="number" value="18765">
+<button id="save" class="primary">Salvar pareamento</button>
+<button id="health">Testar agente</button>
+<hr>
+<button id="enable" class="primary">Ativar nesta aba do ChatGPT</button>
+<button id="disable" class="danger">Desativar automação</button>
+<pre id="status">Carregando...</pre>
+<script src="popup.js"></script>
+</body>
+</html>
