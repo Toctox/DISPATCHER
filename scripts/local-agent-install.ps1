@@ -7,6 +7,7 @@ if (-not (Test-Path -LiteralPath $source)) { throw "local_agent/agent.py not fou
 $base = Join-Path $env:LOCALAPPDATA 'FactoryNode\local-agent'
 $logs = Join-Path $base 'logs'
 $taskName = 'FactoryNode Local Agent'
+$agentPort = 18765
 New-Item -ItemType Directory -Path $base -Force | Out-Null
 New-Item -ItemType Directory -Path $logs -Force | Out-Null
 
@@ -67,8 +68,9 @@ $escapedBase = $base.Replace("'", "''")
 $escapedLog = $logPath.Replace("'", "''")
 $runnerBody = @"
 `$ErrorActionPreference='Continue'
+`$env:FACTORY_LOCAL_AGENT_PORT='$agentPort'
 Set-Location -LiteralPath '$escapedBase'
-"LOCAL_AGENT_START `$([DateTime]::UtcNow.ToString('o')) python=$escapedPython" | Out-File -LiteralPath '$escapedLog' -Append -Encoding utf8
+"LOCAL_AGENT_START `$([DateTime]::UtcNow.ToString('o')) python=$escapedPython port=$agentPort" | Out-File -LiteralPath '$escapedLog' -Append -Encoding utf8
 & '$escapedPython' '$escapedAgent' *>> '$escapedLog'
 `$code=`$LASTEXITCODE
 "LOCAL_AGENT_EXIT `$([DateTime]::UtcNow.ToString('o')) code=`$code" | Out-File -LiteralPath '$escapedLog' -Append -Encoding utf8
@@ -84,10 +86,11 @@ Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Se
 Start-ScheduledTask -TaskName $taskName
 
 $health = $null
+$healthUri = "http://127.0.0.1:$agentPort/health"
 for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Milliseconds 250
     try {
-        $health = Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:8765/health' -TimeoutSec 2
+        $health = Invoke-RestMethod -Method Get -Uri $healthUri -TimeoutSec 2
         if ($health.ok) { break }
     } catch { }
 }
@@ -97,18 +100,21 @@ if (-not $health -or -not $health.ok) {
     if (Test-Path -LiteralPath $logPath) {
         $tail = (Get-Content -LiteralPath $logPath -Tail 30 -ErrorAction SilentlyContinue) -join "`n"
     }
-    throw "Local agent did not become healthy on 127.0.0.1:8765. LastTaskResult=$($taskInfo.LastTaskResult). Log=$logPath`n$tail"
+    throw "Local agent did not become healthy on 127.0.0.1:$agentPort. LastTaskResult=$($taskInfo.LastTaskResult). Log=$logPath`n$tail"
 }
+
+Set-Content -LiteralPath (Join-Path $base 'port.txt') -Value ([string]$agentPort) -Encoding ASCII
 
 [ordered]@{
     status = 'INSTALLED'
     service = $health.service
     version = $health.version
     pid = $health.pid
-    bind = '127.0.0.1:8765'
+    bind = "127.0.0.1:$agentPort"
     mode = $health.mode
     installRoot = $base
     tokenPath = (Join-Path $base 'token.txt')
+    portPath = (Join-Path $base 'port.txt')
     task = $taskName
     log = $logPath
     python = $pythonPath
