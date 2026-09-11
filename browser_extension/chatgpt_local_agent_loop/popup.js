@@ -15,12 +15,14 @@ async function refresh() {
     $("token").placeholder = s.tokenSaved ? "token salvo (deixe vazio para manter)" : "cole token.txt somente aqui";
     const hp = s.health?.payload || s.health;
     const r = s.activeRequest;
+    $("cancel").disabled = !(r && r.state === "EXECUTING");
     $("status").textContent =
+      `Protocolo: ${s.protocolVersion || "antigo"}\n` +
       `Agente: ${s.health?.ok ? "OK" : "OFFLINE"}\n` +
       `Token: ${s.tokenSaved ? "SALVO" : "NÃO CONFIGURADO"}\n` +
       `Automação: ${s.automationEnabled ? "ATIVA" : "DESATIVADA"}\n` +
       `Tab ID: ${s.enabledTabId ?? "-"}\n` +
-      (r ? `Pedido: ${r.requestId}\nEstado: ${r.state}\nDecorrido: ${elapsed(r.startedAt || r.receivedAt)}\nErro: ${r.error || r.transportError || "-"}\n` : "Pedido: nenhum\n") +
+      (r ? `Pedido: ${r.requestId}\nEstado: ${r.state}\nDecorrido: ${elapsed(r.startedAt || r.receivedAt)}\nTimeout: ${r.timeoutSeconds || s.defaultProcessTimeoutSeconds || "-"}s\nAtividade: ${r.statusDetail || "normal"}\nErro: ${r.error || r.transportError || "-"}\n` : "Pedido: nenhum\n") +
       `Health: ${JSON.stringify(hp ?? {})}`;
   } catch (e) { $("status").textContent = String(e.message || e); }
 }
@@ -37,6 +39,14 @@ $("enable").onclick = async () => {
     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
     if (!tab?.id) throw new Error("Nenhuma aba ativa");
     await msg({type: "ENABLE_TAB", tabId: tab.id});
+    await refresh();
+  } catch (e) { $("status").textContent = String(e.message || e); }
+};
+$("cancel").onclick = async () => {
+  try {
+    const s = await msg({type: "GET_STATUS"});
+    if (!s.activeRequest?.requestId || s.activeRequest.state !== "EXECUTING") throw new Error("Nenhum pedido em execução");
+    await msg({type: "CANCEL_REQUEST", requestId: s.activeRequest.requestId});
     await refresh();
   } catch (e) { $("status").textContent = String(e.message || e); }
 };

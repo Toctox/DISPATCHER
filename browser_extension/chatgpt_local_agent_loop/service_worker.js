@@ -1,10 +1,16 @@
 const DEFAULT_PORT = 18765;
+const PROTOCOL_VERSION = "0.2.2";
 const ALLOWED = new Set([
   "/health", "/v1/status", "/v1/processes",
   "/v1/exec", "/v1/process/start", "/v1/process/stop",
   "/v1/process/output", "/v1/file/read", "/v1/file/write", "/v1/file/list"
 ]);
 const JOURNAL_LIMIT = 50;
+const DEFAULT_PROCESS_TIMEOUT_MS = 5 * 60 * 1000;
+const MIN_PROCESS_TIMEOUT_MS = 30 * 1000;
+const MAX_PROCESS_TIMEOUT_MS = 30 * 60 * 1000;
+const NO_PROGRESS_WARNING_MS = 60 * 1000;
+const LONG_RUNNING_MS = 90 * 1000;
 
 async function lockStorage() {
   try { await chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"}); } catch (_) {}
@@ -19,6 +25,13 @@ const validPort = v => {
 };
 const validId = v => typeof v === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(v);
 const isoNow = () => new Date().toISOString();
+const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+function processTimeoutMs(req) {
+  const seconds = Number(req?.timeoutSeconds);
+  if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_PROCESS_TIMEOUT_MS;
+  return clamp(Math.round(seconds * 1000), MIN_PROCESS_TIMEOUT_MS, MAX_PROCESS_TIMEOUT_MS);
+}
 
 function trimValue(v, depth = 0) {
   if (depth > 6) return "[depth-truncated]";
@@ -106,7 +119,27 @@ async function finishRequest(entry, local) {
   };
   await saveResult(entry.requestId, result);
   return saveJournal(entry.requestId, {
-    state: "RESPONSE_READY", result, error: null, completedAt: Date.now()
+    state: "RESPONSE_READY", result, error: null, statusDetail: null, completedAt: Date.now()
+  });
+}
+
+async function stopProcessRequest(entry, reason) {
+  let stopResult = null;
+  let stopError = null;
+  if (entry.agentProcessId) {
+    try {
+      stopResult = await localCall("/v1/process/stop", "POST", {id: entry.agentProcessId}, 12000);
+    } catch (e) {
+      stopError = String(e?.message || e);
+    }
+  }
+  return saveJournal(entry.requestId, {
+    state: "STALLED",
+    error: reason,
+    statusDetail: reason,
+    stoppedAt: Date.now(),
+    stopResult: trimValue(stopResult),
+    stopError
   });
 }
 
@@ -122,7 +155,7 @@ async function refreshRequest(id) {
 
   if (entry.mode === "process" && !entry.agentProcessId) {
     if (Date.now() - (entry.executionStartedAt || entry.startedAt || 0) > 30000)
-      return saveJournal(id, {state: "STALLED", error: "PROCESS_START_RESPONSE_LOST"});
+      return saveJournal(id, {state: "STALLED", error: "PROCESS_START_RESPONSE_LOST", statusDetail: "PROCESS_START_RESPONSE_LOST"});
     return entry;
   }
 
@@ -130,8 +163,39 @@ async function refreshRequest(id) {
     try {
       const out = await localCall("/v1/process/output", "POST", {id: entry.agentProcessId, maxBytes: 65536}, 12000);
       const p = out.payload || {};
-      if (out.ok && p.running === true)
-        return saveJournal(id, {state: "EXECUTING", lastAgentPollAt: Date.now(), pid: p.pid, transportError: null});
+      const now = Date.now();
+      const startedAt = entry.executionStartedAt || entry.startedAt || now;
+      const elapsedMs = Math.max(0, now - startedAt);
+      const timeoutMs = Number(entry.executionTimeoutMs) || DEFAULT_PROCESS_TIMEOUT_MS;
+
+      if (out.ok && p.running === true) {
+        const outputLength = String(p.stdout || "").length + String(p.stderr || "").length;
+        const previousLength = Number(entry.lastOutputLength || 0);
+        const progressed = outputLength > previousLength;
+        const lastProgressAt = progressed ? now : (entry.lastProgressAt || startedAt);
+
+        if (elapsedMs >= timeoutMs) {
+          return stopProcessRequest(entry, `PROCESS_TIMEOUT_${Math.round(timeoutMs / 1000)}S`);
+        }
+
+        let statusDetail = null;
+        if (now - lastProgressAt >= NO_PROGRESS_WARNING_MS) {
+          statusDetail = `NO_PROGRESS_${Math.floor((now - lastProgressAt) / 1000)}S`;
+        } else if (elapsedMs >= LONG_RUNNING_MS) {
+          statusDetail = "LONG_RUNNING_WITH_PROGRESS";
+        }
+
+        return saveJournal(id, {
+          state: "EXECUTING",
+          lastAgentPollAt: now,
+          pid: p.pid,
+          transportError: null,
+          elapsedMs,
+          lastOutputLength: outputLength,
+          lastProgressAt,
+          statusDetail
+        });
+      }
       if (out.ok && p.running === false) {
         const payload = {
           ok: p.exitCode === 0,
@@ -142,12 +206,12 @@ async function refreshRequest(id) {
         };
         return finishRequest(entry, {ok: p.exitCode === 0, httpStatus: 200, payload});
       }
-      return saveJournal(id, {state: "STALLED", error: `PROCESS_OUTPUT_FAILED:${out.httpStatus}`});
+      return saveJournal(id, {state: "STALLED", error: `PROCESS_OUTPUT_FAILED:${out.httpStatus}`, statusDetail: `PROCESS_OUTPUT_FAILED:${out.httpStatus}`});
     } catch (e) {
       const msg = String(e?.message || e);
       if (msg.includes("unknown process id"))
-        return saveJournal(id, {state: "STALLED", error: "LOCAL_AGENT_PROCESS_LOST"});
-      return saveJournal(id, {state: "EXECUTING", transportError: msg, lastAgentPollAt: Date.now()});
+        return saveJournal(id, {state: "STALLED", error: "LOCAL_AGENT_PROCESS_LOST", statusDetail: "LOCAL_AGENT_PROCESS_LOST"});
+      return saveJournal(id, {state: "EXECUTING", transportError: msg, statusDetail: `TRANSPORT_RETRY:${msg}`, lastAgentPollAt: Date.now()});
     }
   }
   return entry;
@@ -167,21 +231,27 @@ async function startRequest(message, sender) {
   const method = req.method === "GET" ? "GET" : "POST";
   let entry = await saveJournal(req.id, {
     state: "RECEIVED", path: req.path, method, tabId: sender.tab.id,
-    receivedAt: Date.now(), startedAt: Date.now(), cwd: req.body?.cwd || null, error: null
+    receivedAt: Date.now(), startedAt: Date.now(), cwd: req.body?.cwd || null, error: null,
+    statusDetail: null
   });
 
   if (req.path === "/v1/exec" && method === "POST") {
-    entry = await saveJournal(req.id, {state: "EXECUTING", mode: "process", executionStartedAt: Date.now()});
+    const timeoutMs = processTimeoutMs(req);
+    entry = await saveJournal(req.id, {
+      state: "EXECUTING", mode: "process", executionStartedAt: Date.now(),
+      executionTimeoutMs: timeoutMs, timeoutSeconds: Math.round(timeoutMs / 1000),
+      lastProgressAt: Date.now(), lastOutputLength: 0
+    });
     try {
       const started = await localCall("/v1/process/start", "POST", req.body ?? {}, 15000);
       if (!started.ok || !started.payload?.id)
-        return saveJournal(req.id, {state: "STALLED", error: `PROCESS_START_FAILED:${started.httpStatus}`});
+        return saveJournal(req.id, {state: "STALLED", error: `PROCESS_START_FAILED:${started.httpStatus}`, statusDetail: `PROCESS_START_FAILED:${started.httpStatus}`});
       return saveJournal(req.id, {
         state: "EXECUTING", agentProcessId: started.payload.id, pid: started.payload.pid,
-        lastAgentPollAt: Date.now(), transportError: null
+        lastAgentPollAt: Date.now(), transportError: null, statusDetail: null
       });
     } catch (e) {
-      return saveJournal(req.id, {state: "STALLED", error: `PROCESS_START_TRANSPORT:${String(e?.message || e)}`});
+      return saveJournal(req.id, {state: "STALLED", error: `PROCESS_START_TRANSPORT:${String(e?.message || e)}`, statusDetail: "PROCESS_START_TRANSPORT"});
     }
   }
 
@@ -190,8 +260,17 @@ async function startRequest(message, sender) {
     const local = await localCall(req.path, method, req.body ?? null, 45000);
     return finishRequest(entry, local);
   } catch (e) {
-    return saveJournal(req.id, {state: "STALLED", error: `DIRECT_CALL_FAILED:${String(e?.message || e)}`});
+    return saveJournal(req.id, {state: "STALLED", error: `DIRECT_CALL_FAILED:${String(e?.message || e)}`, statusDetail: "DIRECT_CALL_FAILED"});
   }
+}
+
+async function cancelRequest(id) {
+  if (!validId(id)) throw new Error("INVALID_REQUEST_ID");
+  const s = await getState();
+  const entry = s.requestJournal[id];
+  if (!entry) throw new Error("UNKNOWN_REQUEST_ID");
+  if (entry.state !== "EXECUTING") return entry;
+  return stopProcessRequest(entry, "CANCELLED_BY_USER");
 }
 
 function newestRequest(state) {
@@ -221,8 +300,10 @@ chrome.runtime.onMessage.addListener((m, sender, sendResponse) => {
         try { active = await refreshRequest(active.requestId); } catch (_) {}
       }
       return {
+        protocolVersion: PROTOCOL_VERSION,
         tokenSaved: Boolean(s.token), port: s.port, enabledTabId: s.enabledTabId,
-        automationEnabled: s.automationEnabled, health, activeRequest: active
+        automationEnabled: s.automationEnabled, health, activeRequest: active,
+        defaultProcessTimeoutSeconds: Math.round(DEFAULT_PROCESS_TIMEOUT_MS / 1000)
       };
     }
 
@@ -253,7 +334,7 @@ chrome.runtime.onMessage.addListener((m, sender, sendResponse) => {
       const pending = Object.values(s.requestJournal)
         .filter(x => x.tabId === sender.tab?.id && x.state !== "SENT" && !(x.state === "STALLED" && x.reportedAt))
         .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
-      return {armed, pendingRequestId: pending?.requestId || null};
+      return {armed, pendingRequestId: pending?.requestId || null, protocolVersion: PROTOCOL_VERSION};
     }
 
     if (m.type === "START_REQUEST") return startRequest(m, sender);
@@ -264,6 +345,8 @@ chrome.runtime.onMessage.addListener((m, sender, sendResponse) => {
       if (!validId(m.requestId)) throw new Error("INVALID_REQUEST_ID");
       return refreshRequest(m.requestId);
     }
+
+    if (m.type === "CANCEL_REQUEST") return cancelRequest(m.requestId);
 
     if (m.type === "MARK_SENDING") {
       const s = await getState(); assertArmed(sender, s);
