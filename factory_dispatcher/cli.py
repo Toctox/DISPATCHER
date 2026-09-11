@@ -36,7 +36,7 @@ def build_launchers(settings, config_file: Path):
     # Force-brute desktop mode: when the official Windows ChatGPT app is already
     # open, prefer the closed foreground launcher. If the app is not open, retain
     # the configured browser/extension launcher unchanged.
-    if ForegroundChatGPTLauncher.available():
+    if settings.chatgpt_browser_mode == "DISABLED" and ForegroundChatGPTLauncher.available():
         chatgpt = ForegroundChatGPTLauncher(settings.state_directory)
 
     return {

@@ -33,12 +33,12 @@ A FactoryBridge existe apenas como bootstrap/recovery enquanto o canal direto ai
 - `/health` é público apenas no loopback e não contém o token;
 - token gerado localmente em `%LOCALAPPDATA%\FactoryNode\local-agent\token.txt` e nunca deve ser publicado no GitHub;
 - logs em `%LOCALAPPDATA%\FactoryNode\local-agent\logs`;
-- inicialização automática pela tarefa agendada por usuário `FactoryNode Local Agent`;
+- inicialização automática e silenciosa por `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\FactoryNode-Local-Agent.vbs`, usando `pythonw.exe`;
 - o agente não eleva privilégio: tudo roda com as permissões normais da conta Windows.
 
 ## Instalação canônica
 
-O script versionado `scripts/local-agent-install.ps1` resolve e qualifica um Python 3 real, compila `agent.py`, registra a tarefa agendada, inicia o agente e valida `GET /health`.
+O script versionado `scripts/local-agent-install.ps1` resolve e qualifica um Python 3 real, exige o `pythonw.exe` correspondente, compila `agent.py`, instala um launcher VBS silencioso na pasta Startup, inicia o agente sem console visível e valida `GET /health`.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\local-agent-install.ps1
@@ -136,20 +136,23 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:18765/v1/exec -Headers $hea
 Parar a instância persistente:
 
 ```powershell
-Stop-ScheduledTask -TaskName 'FactoryNode Local Agent'
+$pid = [int](Get-Content "$env:LOCALAPPDATA\FactoryNode\local-agent\agent.pid" -Raw)
+taskkill.exe /PID $pid /T /F
 ```
 
-Iniciar novamente:
+Iniciar novamente sem abrir console:
 
 ```powershell
-Start-ScheduledTask -TaskName 'FactoryNode Local Agent'
+$launcher = Join-Path ([Environment]::GetFolderPath('Startup')) 'FactoryNode-Local-Agent.vbs'
+Start-Process wscript.exe -ArgumentList ('"' + $launcher + '"') -WindowStyle Hidden
 ```
 
 Diagnóstico:
 
 ```powershell
-Get-ScheduledTaskInfo -TaskName 'FactoryNode Local Agent'
-Get-Content "$env:LOCALAPPDATA\FactoryNode\local-agent\logs\agent.log" -Tail 50
+Invoke-RestMethod http://127.0.0.1:18765/health
+Get-Process pythonw -ErrorAction SilentlyContinue
+Get-Content (Join-Path ([Environment]::GetFolderPath('Startup')) 'FactoryNode-Local-Agent.vbs')
 ```
 
 ## Incidente de bootstrap — porta 8765

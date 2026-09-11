@@ -10,10 +10,10 @@ Observed on the real Windows host during first manual qualification:
 Remediation:
 
 - canonical local-agent port moved to `18765`;
-- installer injects `FACTORY_LOCAL_AGENT_PORT=18765` into the scheduled-task runner;
+- installer injects `FACTORY_LOCAL_AGENT_PORT=18765` in the Startup VBS launcher;
 - installer writes `%LOCALAPPDATA%\FactoryNode\local-agent\port.txt`;
 - health qualification targets `http://127.0.0.1:18765/health`;
-- persistent task remains `FactoryNode Local Agent`;
-- startup failures are retained in `%LOCALAPPDATA%\FactoryNode\local-agent\logs\agent.log`.
+- persistence is provided by `FactoryNode-Local-Agent.vbs` in the current user Startup folder, launching through `pythonw.exe`;
+- `CREATE_NO_WINDOW` is applied to Local Agent child-process execution so PowerShell/CMD work does not create visible console windows.
 
 The local agent remains loopback-only and authenticated for non-health operations.

@@ -30,12 +30,13 @@ jobs:
       - name: Start agent and verify health
         shell: pwsh
         run: |
+          $env:FACTORY_LOCAL_AGENT_PORT='18765'
           $p=Start-Process python -ArgumentList 'local_agent/agent.py' -PassThru -WindowStyle Hidden
           try {
             $ok=$false
             for($i=0;$i -lt 20;$i++){
               Start-Sleep -Milliseconds 250
-              try { $h=Invoke-RestMethod http://127.0.0.1:8765/health -TimeoutSec 2; if($h.ok){$ok=$true;break} } catch {}
+              try { $h=Invoke-RestMethod http://127.0.0.1:18765/health -TimeoutSec 2; if($h.ok){$ok=$true;break} } catch {}
             }
             if(-not $ok){ throw 'health probe failed' }
             if($h.service -ne 'factory-local-agent'){ throw 'unexpected service identity' }
