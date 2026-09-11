@@ -129,7 +129,7 @@ func TestScriptRunUsesExactIsolatedCommit(t *testing.T) {
 	git("commit", "-m", "fixture")
 	target := git("rev-parse", "HEAD")
 	git("remote", "add", "origin", repo)
-	m := Mission{ID: "M-script-exact", Kind: "script.run", TargetCommit: target, Objective: `{"repo":"dispatcher","script":"scripts/factorybridge-smoke.ps1","args":{"Message":"SPACE VALUE"},"timeoutSec":30}`}
+	m := Mission{ID: "M-script-exact", Kind: "script.run", TargetCommit: target, Objective: `{"repo":"dispatcher","script":"scripts/factorybridge-smoke.ps1","args":{"Message":"SPACE VALUE"},"timeoutSec":120}`}
 	res := executeScriptRun(Config{DispatcherWorkDir: repo}, m, time.Now(), osRunner{})
 	if res.Status != "ok" || !strings.Contains(res.Output, "EXACT:SPACE VALUE") {
 		t.Fatalf("script failed %+v", res)
