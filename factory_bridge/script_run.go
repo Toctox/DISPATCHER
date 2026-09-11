@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const scriptRunPreflightTimeout = 45 * time.Second
+
 type scriptRunRequest struct {
 	Repo       string            `json:"repo"`
 	Script     string            `json:"script"`
@@ -35,7 +37,6 @@ func decodeScriptRun(m Mission) (scriptRunRequest, error) {
 		return req, errors.New("script parameters exceed 8 KiB")
 	}
 	dec := json.NewDecoder(strings.NewReader(m.Objective))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		return req, err
 	}
@@ -58,6 +59,23 @@ func decodeScriptRun(m Mission) (scriptRunRequest, error) {
 	return req, nil
 }
 
+func runScriptGitPhase(r runner, repo, phase string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), scriptRunPreflightTimeout)
+	defer cancel()
+	base := []string{"-c", "core.hooksPath=NUL", "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false", "-c", "credential.interactive=never"}
+	out, stderr, code, runErr := r.Run(ctx, runSpec{exe: "git.exe", args: append(base, args...), dir: repo, logical: "PHASE=" + phase})
+	if runErr != nil || code != 0 {
+		cause := tailCompact(sanitizeRemoteText(stderr), 500)
+		if ctx.Err() != nil {
+			cause = ctx.Err().Error()
+		} else if cause == "" && runErr != nil {
+			cause = runErr.Error()
+		}
+		return "", fmt.Errorf("PHASE=%s exact script checkout failed (exit=%d): %s", phase, code, cause)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 func executeScriptRun(cfg Config, m Mission, start time.Time, r runner) (res Result) {
 	res = baseResult(Command{ID: m.ID, Action: m.Kind}, start)
 	defer finish(&res, start)
@@ -74,27 +92,16 @@ func executeScriptRun(cfg Config, m Mission, start time.Time, r runner) (res Res
 	if err != nil {
 		return blocked(err)
 	}
-	seconds := req.TimeoutSec
-	if seconds == 0 {
-		seconds = 600
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second)
-	defer cancel()
-	git := func(args ...string) (string, error) {
-		base := []string{"-c", "core.hooksPath=NUL", "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false"}
-		out, stderr, code, err := r.Run(ctx, runSpec{exe: "git.exe", args: append(base, args...), dir: repo})
-		if err != nil || code != 0 {
-			return "", fmt.Errorf("exact script checkout failed (exit=%d): %s", code, tailCompact(sanitizeRemoteText(stderr), 500))
-		}
-		return strings.TrimSpace(out), nil
-	}
-	// Only already reviewed commits reachable from the canonical main are
-	// eligible; a mutable branch is never substituted for the requested object.
-	if _, err = git("fetch", "origin", "main"); err != nil {
+
+	// Checkout/preflight has its own bounded phase budget. The caller-requested
+	// TimeoutSec is reserved for the reviewed script itself so a slow credential,
+	// fetch or worktree operation cannot consume the script execution budget and
+	// turn a deterministic script failure into an opaque timeout.
+	if _, err = runScriptGitPhase(r, repo, "script_preflight_fetch", "fetch", "--no-tags", "origin", "main"); err != nil {
 		return blocked(err)
 	}
-	if _, err = git("merge-base", "--is-ancestor", m.TargetCommit, "origin/main"); err != nil {
-		return blocked(errors.New("script commit is not reviewed on origin/main"))
+	if _, err = runScriptGitPhase(r, repo, "script_preflight_ancestry", "merge-base", "--is-ancestor", m.TargetCommit, "origin/main"); err != nil {
+		return blocked(errors.New("PHASE=script_preflight_ancestry script commit is not reviewed on origin/main: " + err.Error()))
 	}
 	base := os.Getenv("LOCALAPPDATA")
 	if base == "" {
@@ -107,15 +114,15 @@ func executeScriptRun(cfg Config, m Mission, start time.Time, r runner) (res Res
 	if err = os.MkdirAll(filepath.Dir(workspace), 0700); err != nil {
 		return blocked(err)
 	}
-	if _, err = git("worktree", "add", "--detach", workspace, m.TargetCommit); err != nil {
+	if _, err = runScriptGitPhase(r, repo, "script_preflight_worktree", "worktree", "add", "--detach", workspace, m.TargetCommit); err != nil {
 		return blocked(err)
 	}
-	oldRepo := repo
-	repo = workspace
-	head, err := git("rev-parse", "HEAD")
-	repo = oldRepo
+	head, err := runScriptGitPhase(r, workspace, "script_preflight_head", "rev-parse", "HEAD")
 	if err != nil || !strings.EqualFold(head, m.TargetCommit) {
-		return blocked(errors.New("script workspace commit mismatch"))
+		if err != nil {
+			return blocked(err)
+		}
+		return blocked(errors.New("PHASE=script_preflight_head script workspace commit mismatch"))
 	}
 	workspaceReal, err := filepath.EvalSymlinks(workspace)
 	if err != nil {
@@ -126,6 +133,7 @@ func executeScriptRun(cfg Config, m Mission, start time.Time, r runner) (res Res
 	if err != nil || !withinRoot(real, workspaceReal) {
 		return blocked(errors.New("script path escapes workspace or is missing"))
 	}
+
 	// Arguments are serialized as data and consumed by a fixed wrapper, never
 	// interpolated into PowerShell source or accepted as extra shell options.
 	dir, err := missionLocalDir(m.ID)
@@ -157,13 +165,21 @@ if($LASTEXITCODE){exit $LASTEXITCODE}
 	res.Meta["sourceCommit"] = m.TargetCommit
 	res.Meta["argumentNames"] = names
 	res.Meta["workingDir"] = workspaceReal
-	stdout, stderr, code, runErr := r.Run(ctx, runSpec{exe: "powershell.exe", args: []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-File", wrapper, "-ScriptPath", real, "-ArgumentsPath", argsPath}, dir: workspaceReal, logical: res.LogicalCommand})
+	res.Meta["phase"] = "script_execute"
+
+	seconds := req.TimeoutSec
+	if seconds == 0 {
+		seconds = 600
+	}
+	scriptCtx, cancelScript := context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second)
+	defer cancelScript()
+	stdout, stderr, code, runErr := r.Run(scriptCtx, runSpec{exe: "powershell.exe", args: []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-File", wrapper, "-ScriptPath", real, "-ArgumentsPath", argsPath}, dir: workspaceReal, logical: "PHASE=script_execute " + res.LogicalCommand})
 	res.Stdout, res.Stderr, res.ExitCode = stdout, stderr, &code
 	if runErr != nil || code != 0 {
 		res.Status = "failed"
-		res.Error = fmt.Sprintf("script failed (exit=%d)", code)
-		if ctx.Err() != nil {
-			res.Error = ctx.Err().Error()
+		res.Error = fmt.Sprintf("PHASE=script_execute script failed (exit=%d)", code)
+		if scriptCtx.Err() != nil {
+			res.Error = "PHASE=script_execute " + scriptCtx.Err().Error()
 		}
 	} else {
 		res.Status = "ok"
