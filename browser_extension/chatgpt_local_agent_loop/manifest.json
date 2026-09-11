@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Local Agent Loop",
-  "version": "0.2.2",
-  "description": "Resilient ChatGPT tab ↔ localhost Factory Local Agent loop with persistent state, stale-command protection, progress watchdogs, timeout and cancellation.",
+  "version": "0.2.3",
+  "description": "Resilient ChatGPT tab ↔ localhost Factory Local Agent loop with persistent state, stale-command protection, progress watchdogs, timeout, cancellation, and duplicate-result suppression.",
   "minimum_chrome_version": "120",
   "permissions": [
     "storage",
@@ -26,6 +26,7 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "delivery_guard.js",
         "content.js"
       ],
       "run_at": "document_idle",
