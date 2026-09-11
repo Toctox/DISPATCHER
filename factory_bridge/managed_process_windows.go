@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	createSuspended                    = 0x00000004
-	jobObjectExtendedLimitInformation = 9
-	jobObjectLimitKillOnJobClose       = 0x00002000
-	processTerminate                   = 0x0001
-	processSetQuota                    = 0x0100
-	processSuspendResume               = 0x0800
+	createSuspended                  = 0x00000004
+	jobObjectInfoClassExtendedLimit = 9
+	jobObjectLimitKillOnJobClose     = 0x00002000
+	processTerminate                 = 0x0001
+	processSetQuota                  = 0x0100
+	processSuspendResume             = 0x0800
 )
 
 type jobObjectBasicLimitInformation struct {
@@ -53,15 +53,15 @@ type jobObjectExtendedLimitInformation struct {
 }
 
 var (
-	kernel32                   = syscall.NewLazyDLL("kernel32.dll")
-	ntdll                      = syscall.NewLazyDLL("ntdll.dll")
-	procCreateJobObjectW       = kernel32.NewProc("CreateJobObjectW")
-	procSetInformationJobObject = kernel32.NewProc("SetInformationJobObject")
+	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
+	ntdll                        = syscall.NewLazyDLL("ntdll.dll")
+	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
+	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
 	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
-	procTerminateJobObject     = kernel32.NewProc("TerminateJobObject")
-	procOpenProcess            = kernel32.NewProc("OpenProcess")
-	procCloseHandle            = kernel32.NewProc("CloseHandle")
-	procNtResumeProcess        = ntdll.NewProc("NtResumeProcess")
+	procTerminateJobObject       = kernel32.NewProc("TerminateJobObject")
+	procOpenProcess              = kernel32.NewProc("OpenProcess")
+	procCloseHandle              = kernel32.NewProc("CloseHandle")
+	procNtResumeProcess          = ntdll.NewProc("NtResumeProcess")
 )
 
 func winCallError(name string, errno error) error {
@@ -81,7 +81,7 @@ func newKillOnCloseJob() (syscall.Handle, error) {
 	info.BasicLimitInformation.LimitFlags = jobObjectLimitKillOnJobClose
 	ok, _, errno := procSetInformationJobObject.Call(
 		uintptr(job),
-		jobObjectExtendedLimitInformation,
+		jobObjectInfoClassExtendedLimit,
 		uintptr(unsafe.Pointer(&info)),
 		unsafe.Sizeof(info),
 	)
@@ -129,9 +129,9 @@ func resumeManagedProcess(process syscall.Handle) error {
 	return nil
 }
 
-// runManagedProcessWindows creates the child suspended, assigns it to a Job
-// Object configured with KILL_ON_JOB_CLOSE, and only then resumes it. This
-// removes the usual process-tree escape window between Start and job assignment.
+// runManagedProcess creates the child suspended, assigns it to a Job Object
+// configured with KILL_ON_JOB_CLOSE, and only then resumes it. This removes the
+// process-tree escape window between process creation and job assignment.
 func runManagedProcess(ctx context.Context, spec runSpec) (string, string, int, error) {
 	job, err := newKillOnCloseJob()
 	if err != nil {
