@@ -1,4 +1,5 @@
 (() => {
+  const EXPECTED_PROTOCOL_VERSION = "0.2.2";
   let armed = false;
   let busy = false;
   let protocolCompatible = false;
@@ -156,10 +157,10 @@
   async function checkProtocol() {
     try {
       const status = await runtimeMessage({type: "GET_STATUS"}, 1);
-      protocolCompatible = Object.prototype.hasOwnProperty.call(status || {}, "activeRequest");
+      protocolCompatible = status?.protocolVersion === EXPECTED_PROTOCOL_VERSION;
       if (!protocolCompatible) {
         armed = false;
-        setState("UPDATE_REQUIRED", "content 0.2.1 / service worker antigo");
+        setState("UPDATE_REQUIRED", `content ${EXPECTED_PROTOCOL_VERSION} / worker ${status?.protocolVersion || "antigo"}`);
       }
       return protocolCompatible;
     } catch (e) {
@@ -194,7 +195,7 @@
       let st;
       try { st = await runtimeMessage({type: "GET_REQUEST_STATUS", requestId}, 3); }
       catch (e) { setState("RECOVERING_CHANNEL", String(e?.message || e)); await sleep(1500); continue; }
-      setState(st.state || "UNKNOWN", st.error || st.transportError || "");
+      setState(st.state || "UNKNOWN", st.statusDetail || st.error || st.transportError || "");
 
       if (st.state === "RESPONSE_READY" || st.state === "SENDING") {
         await runtimeMessage({type: "MARK_SENDING", requestId}, 3);
@@ -207,7 +208,7 @@
       if (st.state === "STALLED") {
         await submit(resultMessage(requestId, {status: "ERROR", error: st.error || "REQUEST_STALLED"}));
         await runtimeMessage({type: "MARK_SENT", requestId, preserveState: true}, 3);
-        setState("STALLED", st.error || "");
+        setState("STALLED", st.statusDetail || st.error || "");
         return;
       }
       await sleep(1000);
@@ -225,7 +226,7 @@
     try {
       if (!protocolCompatible && !(await checkProtocol())) throw new Error("UPDATE_REQUIRED");
       const started = await runtimeMessage({type: "START_REQUEST", request: req}, 6);
-      setState(started.state || "EXECUTING", started.error || "");
+      setState(started.state || "EXECUTING", started.statusDetail || started.error || "");
       await deliverRequest(req.id);
     } catch (e) {
       const msg = String(e?.message || e);
