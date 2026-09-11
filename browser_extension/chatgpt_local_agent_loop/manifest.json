@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Local Agent Loop",
-  "version": "0.2.0",
-  "description": "Resilient ChatGPT tab ↔ localhost Factory Local Agent loop with persistent request state and watchdog recovery.",
+  "version": "0.2.1",
+  "description": "Resilient ChatGPT tab ↔ localhost Factory Local Agent loop with persistent request state, stale-command protection, and protocol recovery.",
   "minimum_chrome_version": "120",
   "permissions": [
     "storage",

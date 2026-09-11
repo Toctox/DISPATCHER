@@ -1,11 +1,14 @@
 (() => {
   let armed = false;
   let busy = false;
+  let protocolCompatible = false;
+  let recoveryTimer = null;
   const seen = new Set();
   let scanTimer = null;
   let currentRequestId = null;
   let currentStartedAt = null;
   let currentState = "IDLE";
+  let currentDetail = "";
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   const assistantRoots = () => [
@@ -29,15 +32,16 @@
     return el;
   }
 
-  function setState(state, detail = "") {
+  function setState(state, detail = currentDetail) {
     currentState = state;
+    currentDetail = detail || "";
     const elapsed = currentStartedAt ? Math.max(0, Math.floor((Date.now() - currentStartedAt) / 1000)) : 0;
     badge().textContent = `Local Agent: ${state}` +
       (currentRequestId ? `\n${currentRequestId}` : "") +
       (currentStartedAt ? ` · ${elapsed}s` : "") +
-      (detail ? `\n${detail}` : "");
+      (currentDetail ? `\n${currentDetail}` : "");
   }
-  setInterval(() => setState(currentState), 1000);
+  setInterval(() => setState(currentState, currentDetail), 1000);
 
   function blockTexts() {
     const out = [];
@@ -48,6 +52,10 @@
       }
     }
     return [...new Set(out)];
+  }
+
+  function snapshotExistingBlocks() {
+    for (const text of blockTexts()) seen.add(text);
   }
 
   function parseBlock(text) {
@@ -97,14 +105,14 @@
       const el = composer();
       const stop = document.querySelector('button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Parar"]');
       if (el && !stop && composerText(el).trim() === "") return el;
-      setState("WAITING_COMPOSER");
+      setState("WAITING_COMPOSER", currentDetail);
       await sleep(250);
     }
     throw new Error("COMPOSER_NOT_READY");
   }
 
   async function submit(text) {
-    setState("SENDING");
+    setState("SENDING", currentDetail);
     const el = await waitComposer();
     insert(el, text);
     await sleep(150);
@@ -145,6 +153,39 @@
     throw last || new Error("EXTENSION_CHANNEL_ERROR");
   }
 
+  async function checkProtocol() {
+    try {
+      const status = await runtimeMessage({type: "GET_STATUS"}, 1);
+      protocolCompatible = Object.prototype.hasOwnProperty.call(status || {}, "activeRequest");
+      if (!protocolCompatible) {
+        armed = false;
+        setState("UPDATE_REQUIRED", "content 0.2.1 / service worker antigo");
+      }
+      return protocolCompatible;
+    } catch (e) {
+      protocolCompatible = false;
+      armed = false;
+      setState("CHANNEL_OFFLINE", String(e?.message || e));
+      return false;
+    }
+  }
+
+  function startRecoveryLoop() {
+    if (recoveryTimer) return;
+    recoveryTimer = setInterval(async () => {
+      if (protocolCompatible) {
+        clearInterval(recoveryTimer);
+        recoveryTimer = null;
+        return;
+      }
+      if (await checkProtocol()) {
+        clearInterval(recoveryTimer);
+        recoveryTimer = null;
+        await initializeReadyState(true);
+      }
+    }, 3000);
+  }
+
   async function deliverRequest(requestId) {
     currentRequestId = requestId;
     if (!currentStartedAt) currentStartedAt = Date.now();
@@ -159,10 +200,10 @@
         await runtimeMessage({type: "MARK_SENDING", requestId}, 3);
         await submit(resultMessage(requestId, {status: "OK", value: st.result}));
         await runtimeMessage({type: "MARK_SENT", requestId}, 3);
-        setState("SENT");
+        setState("SENT", "");
         return;
       }
-      if (st.state === "SENT") { setState("SENT"); return; }
+      if (st.state === "SENT") { setState("SENT", ""); return; }
       if (st.state === "STALLED") {
         await submit(resultMessage(requestId, {status: "ERROR", error: st.error || "REQUEST_STALLED"}));
         await runtimeMessage({type: "MARK_SENT", requestId, preserveState: true}, 3);
@@ -180,8 +221,9 @@
     seen.add(textKey);
     currentRequestId = req.id;
     currentStartedAt = Date.now();
-    setState("RECEIVED");
+    setState("RECEIVED", "");
     try {
+      if (!protocolCompatible && !(await checkProtocol())) throw new Error("UPDATE_REQUIRED");
       const started = await runtimeMessage({type: "START_REQUEST", request: req}, 6);
       setState(started.state || "EXECUTING", started.error || "");
       await deliverRequest(req.id);
@@ -199,7 +241,7 @@
 
   async function scan() {
     scanTimer = null;
-    if (!armed || busy) return;
+    if (!armed || busy || !protocolCompatible) return;
     for (const text of blockTexts()) {
       if (seen.has(text)) continue;
       let req;
@@ -215,30 +257,12 @@
     scanTimer = setTimeout(scan, 500);
   }
 
-  chrome.runtime.onMessage.addListener((m, _sender, sendResponse) => {
-    if (m?.type === "ARM_NOW") {
-      for (const text of blockTexts()) seen.add(text);
-      armed = true;
-      setState("READY");
-      scheduleScan();
-      sendResponse({ok: true, ignoredExisting: seen.size});
-      return;
-    }
-    if (m?.type === "DISARM") {
-      armed = false;
-      setState("DISARMED");
-      sendResponse({ok: true});
-      return;
-    }
-  });
-
-  new MutationObserver(scheduleScan).observe(document.documentElement, {subtree: true, childList: true, characterData: true});
-
-  (async () => {
+  async function initializeReadyState(fromRecovery = false) {
+    snapshotExistingBlocks();
     try {
       const r = await runtimeMessage({type: "CONTENT_READY"}, 3);
       armed = Boolean(r?.armed);
-      setState(armed ? "READY" : "DISARMED");
+      setState(armed ? "READY" : "DISARMED", fromRecovery ? "protocolo recuperado" : "");
       if (armed && r?.pendingRequestId) {
         busy = true;
         currentRequestId = r.pendingRequestId;
@@ -250,6 +274,40 @@
       }
     } catch (e) {
       setState("CHANNEL_OFFLINE", String(e?.message || e));
+      protocolCompatible = false;
+      armed = false;
+      startRecoveryLoop();
     }
+  }
+
+  chrome.runtime.onMessage.addListener((m, _sender, sendResponse) => {
+    if (m?.type === "ARM_NOW") {
+      if (!protocolCompatible) {
+        setState("UPDATE_REQUIRED", "service worker incompatível");
+        sendResponse({ok: false, error: "PROTOCOL_MISMATCH"});
+        startRecoveryLoop();
+        return;
+      }
+      snapshotExistingBlocks();
+      armed = true;
+      setState("READY", "");
+      scheduleScan();
+      sendResponse({ok: true, ignoredExisting: seen.size});
+      return;
+    }
+    if (m?.type === "DISARM") {
+      armed = false;
+      setState("DISARMED", "");
+      sendResponse({ok: true});
+      return;
+    }
+  });
+
+  new MutationObserver(scheduleScan).observe(document.documentElement, {subtree: true, childList: true, characterData: true});
+
+  (async () => {
+    snapshotExistingBlocks();
+    if (await checkProtocol()) await initializeReadyState(false);
+    else startRecoveryLoop();
   })();
 })();
