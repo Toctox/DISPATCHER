@@ -14,7 +14,10 @@ import (
 	"time"
 )
 
-const scriptRunPreflightTimeout = 45 * time.Second
+const (
+	scriptRunPreflightTimeout = 45 * time.Second
+	scriptRunWorktreeTimeout  = 3 * time.Minute
+)
 
 type scriptRunRequest struct {
 	Repo       string            `json:"repo"`
@@ -29,6 +32,7 @@ var scriptPolicy = map[string]map[string]*regexp.Regexp{
 	"dispatcher:scripts/factorybridge-verify.ps1":    {"TestPattern": regexp.MustCompile(`^[A-Za-z0-9_/.|^-]{1,200}$`)},
 	"dispatcher:scripts/factorybridge-smoke.ps1":     {"Message": regexp.MustCompile(`^[A-Za-z0-9 _.-]{0,200}$`)},
 	"dispatcher:scripts/factorybridge-e2e-probe.ps1": {"Mode": regexp.MustCompile(`^(success|failure|spawn-timeout|inspect-tree)$`)},
+	"dispatcher:scripts/local-agent-install.ps1":     {},
 }
 
 func decodeScriptRun(m Mission) (scriptRunRequest, error) {
@@ -59,8 +63,15 @@ func decodeScriptRun(m Mission) (scriptRunRequest, error) {
 	return req, nil
 }
 
+func scriptGitPhaseTimeout(phase string) time.Duration {
+	if phase == "script_preflight_worktree" {
+		return scriptRunWorktreeTimeout
+	}
+	return scriptRunPreflightTimeout
+}
+
 func runScriptGitPhase(r runner, repo, phase string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), scriptRunPreflightTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), scriptGitPhaseTimeout(phase))
 	defer cancel()
 	base := []string{"-c", "core.hooksPath=NUL", "-c", "core.fsmonitor=false", "-c", "submodule.recurse=false", "-c", "credential.interactive=never"}
 	out, stderr, code, runErr := r.Run(ctx, runSpec{exe: "git.exe", args: append(base, args...), dir: repo, logical: "PHASE=" + phase})
@@ -96,7 +107,9 @@ func executeScriptRun(cfg Config, m Mission, start time.Time, r runner) (res Res
 	// Checkout/preflight has its own bounded phase budget. The caller-requested
 	// TimeoutSec is reserved for the reviewed script itself so a slow credential,
 	// fetch or worktree operation cannot consume the script execution budget and
-	// turn a deterministic script failure into an opaque timeout.
+	// turn a deterministic script failure into an opaque timeout. Materializing a
+	// Windows worktree is allowed a larger, still-bounded budget than metadata-only
+	// fetch/ancestry/head phases because antivirus/filesystem work can dominate it.
 	if _, err = runScriptGitPhase(r, repo, "script_preflight_fetch", "fetch", "--no-tags", "origin", "main"); err != nil {
 		return blocked(err)
 	}

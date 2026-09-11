@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'factory_dispatcher/**'
+      - 'local_agent/**'
       - 'scripts/**'
       - 'tests/test_chatgpt_extension.py'
       - 'tests/test_chatgpt_bridge_resilience.py'
@@ -16,6 +17,7 @@ on:
   pull_request:
     paths:
       - 'factory_dispatcher/**'
+      - 'local_agent/**'
       - 'scripts/**'
       - 'tests/test_chatgpt_extension.py'
       - 'tests/test_chatgpt_bridge_resilience.py'
@@ -39,10 +41,12 @@ jobs:
           python-version: '3.11'
       - name: Install extension bridge test dependencies
         run: python -m pip install -r requirements-extension.txt pytest
+      - name: Compile local agent
+        run: python -m py_compile local_agent/agent.py
       - name: Parse dispatcher PowerShell
         shell: pwsh
         run: |
-          foreach ($script in @('scripts/run-tick.ps1', 'scripts/chatgpt-focus-composer.ps1')) {
+          foreach ($script in @('scripts/run-tick.ps1', 'scripts/chatgpt-focus-composer.ps1', 'scripts/local-agent-install.ps1')) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile(

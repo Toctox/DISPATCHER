@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 type scriptPreflightFailRunner struct{}
@@ -38,5 +39,23 @@ func TestScriptRunExecutionHasIndependentTimeoutContext(t *testing.T) {
 	req := scriptRunRequest{TimeoutSec: 180}
 	if req.TimeoutSec != 180 {
 		t.Fatal("script timeout request was not preserved")
+	}
+}
+
+func TestScriptRunWorktreeGetsLargerButBoundedPreflightBudget(t *testing.T) {
+	if got := scriptGitPhaseTimeout("script_preflight_fetch"); got != 45*time.Second {
+		t.Fatalf("fetch timeout = %s, want 45s", got)
+	}
+	if got := scriptGitPhaseTimeout("script_preflight_ancestry"); got != 45*time.Second {
+		t.Fatalf("ancestry timeout = %s, want 45s", got)
+	}
+	if got := scriptGitPhaseTimeout("script_preflight_head"); got != 45*time.Second {
+		t.Fatalf("head timeout = %s, want 45s", got)
+	}
+	if got := scriptGitPhaseTimeout("script_preflight_worktree"); got != 3*time.Minute {
+		t.Fatalf("worktree timeout = %s, want 3m", got)
+	}
+	if scriptGitPhaseTimeout("script_preflight_worktree") <= scriptGitPhaseTimeout("script_preflight_fetch") {
+		t.Fatal("worktree materialization budget must exceed metadata preflight budget")
 	}
 }
