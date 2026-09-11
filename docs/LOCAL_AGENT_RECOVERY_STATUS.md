@@ -1,0 +1,1 @@
+Status: recovery branch prepared after live Windows qualification. The active remaining check is whether the local agent binds successfully to loopback port 18765. If the manual qualification succeeds, merge this branch and re-run the canonical installer; if not, inspect the new agent log and Windows excluded-port ranges before selecting another fixed port.

@@ -1,0 +1,44 @@
+name: LocalAgentSmoke
+
+on:
+  pull_request:
+    paths:
+      - 'local_agent/**'
+      - 'scripts/local-agent-install.ps1'
+      - '.github/workflows/local-agent-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile agent
+        run: python -m py_compile local_agent/agent.py
+      - name: Parse installer PowerShell
+        shell: pwsh
+        run: |
+          $tokens=$null; $errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'scripts/local-agent-install.ps1'),[ref]$tokens,[ref]$errors) | Out-Null
+          if($errors.Count -gt 0){ $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+      - name: Start agent and verify health
+        shell: pwsh
+        run: |
+          $p=Start-Process python -ArgumentList 'local_agent/agent.py' -PassThru -WindowStyle Hidden
+          try {
+            $ok=$false
+            for($i=0;$i -lt 20;$i++){
+              Start-Sleep -Milliseconds 250
+              try { $h=Invoke-RestMethod http://127.0.0.1:8765/health -TimeoutSec 2; if($h.ok){$ok=$true;break} } catch {}
+            }
+            if(-not $ok){ throw 'health probe failed' }
+            if($h.service -ne 'factory-local-agent'){ throw 'unexpected service identity' }
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }
