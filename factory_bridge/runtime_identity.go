@@ -10,7 +10,7 @@ import (
 )
 
 const factoryBusProtocolVersion = "FACTORY_BUS_V2"
-const factoryRiskPolicyVersion = "2026-09-10.3"
+const factoryRiskPolicyVersion = "2026-09-10.4"
 
 // Injected by the approved build. Never infer executing code from a mutable
 // checkout or installed-runtime.json (which can already describe a replacement).

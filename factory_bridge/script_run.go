@@ -24,8 +24,9 @@ type scriptRunRequest struct {
 // This is an execution allowlist, not a list of arbitrary repository scripts.
 // Expanding it requires a reviewed runtime/policy change.
 var scriptPolicy = map[string]map[string]*regexp.Regexp{
-	"dispatcher:scripts/factorybridge-verify.ps1": {"TestPattern": regexp.MustCompile(`^[A-Za-z0-9_/.|^-]{1,200}$`)},
-	"dispatcher:scripts/factorybridge-smoke.ps1":  {"Message": regexp.MustCompile(`^[A-Za-z0-9 _.-]{0,200}$`)},
+	"dispatcher:scripts/factorybridge-verify.ps1":    {"TestPattern": regexp.MustCompile(`^[A-Za-z0-9_/.|^-]{1,200}$`)},
+	"dispatcher:scripts/factorybridge-smoke.ps1":     {"Message": regexp.MustCompile(`^[A-Za-z0-9 _.-]{0,200}$`)},
+	"dispatcher:scripts/factorybridge-e2e-probe.ps1": {"Mode": regexp.MustCompile(`^(success|failure|spawn-timeout|inspect-tree)$`)},
 }
 
 func decodeScriptRun(m Mission) (scriptRunRequest, error) {
