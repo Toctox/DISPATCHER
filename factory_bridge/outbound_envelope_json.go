@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,7 @@ func (e *githubBusEnvelope) UnmarshalJSON(data []byte) error {
 	if wire.Diagnostic != nil {
 		t := strings.ToUpper(strings.TrimSpace(decoded.Type))
 		if t != "CHECKPOINT" {
-			return &json.UnmarshalTypeError{Value: "diagnostic on non-checkpoint envelope", Type: nil}
+			return errors.New("diagnostic is output-only and only valid on CHECKPOINT envelopes")
 		}
 	}
 	*e = decoded
