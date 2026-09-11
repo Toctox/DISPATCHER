@@ -13,7 +13,7 @@ ChatGPT / controlador
         |
         | futuro conector/MCP/extensão
         v
-127.0.0.1:8765  Factory Local Agent
+127.0.0.1:18765  Factory Local Agent
         |
         +-- PowerShell / CMD / executáveis diretos
         +-- arquivos locais
@@ -26,30 +26,29 @@ A FactoryBridge existe apenas como bootstrap/recovery enquanto o canal direto ai
 ## Princípios do LOCAL_SANDBOX
 
 - bind exclusivo em `127.0.0.1`;
+- porta canônica local `18765`, registrada em `%LOCALAPPDATA%\FactoryNode\local-agent\port.txt`;
 - execução ampla sob a identidade Windows do usuário atual;
 - sem allowlist de comandos, sem regex de shell e sem working-root artificial;
 - token bearer local obrigatório para todas as operações que têm efeito ou expõem dados;
 - `/health` é público apenas no loopback e não contém o token;
 - token gerado localmente em `%LOCALAPPDATA%\FactoryNode\local-agent\token.txt` e nunca deve ser publicado no GitHub;
 - logs em `%LOCALAPPDATA%\FactoryNode\local-agent\logs`;
-- inicialização automática por `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\FactoryNode-Local-Agent.cmd`;
+- inicialização automática pela tarefa agendada por usuário `FactoryNode Local Agent`;
 - o agente não eleva privilégio: tudo roda com as permissões normais da conta Windows.
 
 ## Instalação canônica
 
-O script versionado `scripts/local-agent-install.ps1` instala a versão existente no commit exato do DISPATCHER, reinicia uma instância anterior e qualifica `GET /health`.
-
-Instalação final:
+O script versionado `scripts/local-agent-install.ps1` resolve e qualifica um Python 3 real, compila `agent.py`, registra a tarefa agendada, inicia o agente e valida `GET /health`.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\local-agent-install.ps1
 ```
 
-No fluxo remoto de bootstrap, o mesmo script é executado via `FACTORY_BUS_V2` / `script.run` depois que o commit estiver promovido no FactoryBridge.
+No fluxo remoto de bootstrap, o mesmo script pode ser executado via FactoryBridge. A operação cotidiana não depende desse BUS.
 
 ## API local
 
-Base URL: `http://127.0.0.1:8765`
+Base URL: `http://127.0.0.1:18765`
 
 ### Health
 
@@ -88,25 +87,21 @@ X-Local-Agent-Token: <token>
 
 ### Processo longo
 
-`POST /v1/process/start`
+`POST /v1/process/start` retorna `id` e `pid`. A saída é gravada em arquivos de log locais.
 
-Retorna `id` e `pid`. A saída é gravada em arquivos de log locais.
-
-`POST /v1/process/output`
+`POST /v1/process/output`:
 
 ```json
 {"id":"<task-id>","maxBytes":65536}
 ```
 
-`POST /v1/process/stop`
+`POST /v1/process/stop`:
 
 ```json
 {"id":"<task-id>"}
 ```
 
-No Windows, o stop usa `taskkill /T /F` para encerrar a árvore iniciada por aquela tarefa.
-
-`GET /v1/processes` lista os processos iniciados pela instância atual do agente.
+No Windows, o stop usa `taskkill /T /F` para encerrar a árvore iniciada por aquela tarefa. `GET /v1/processes` lista os processos iniciados pela instância atual.
 
 ### Arquivos
 
@@ -121,10 +116,10 @@ Não há root artificial no modo LOCAL_SANDBOX. O limite real é a permissão da
 Health:
 
 ```powershell
-Invoke-RestMethod http://127.0.0.1:8765/health
+Invoke-RestMethod http://127.0.0.1:18765/health
 ```
 
-Ler token localmente:
+Ler token localmente sem publicá-lo:
 
 ```powershell
 $token = (Get-Content "$env:LOCALAPPDATA\FactoryNode\local-agent\token.txt" -Raw).Trim()
@@ -135,33 +130,38 @@ Executar:
 ```powershell
 $headers = @{ Authorization = "Bearer $token" }
 $body = @{ shell='powershell'; command='Get-Location'; timeoutSec=30 } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8765/v1/exec -Headers $headers -ContentType 'application/json' -Body $body
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:18765/v1/exec -Headers $headers -ContentType 'application/json' -Body $body
 ```
 
-Parar o daemon:
+Parar a instância persistente:
 
 ```powershell
-powershell -NoProfile -File "$env:LOCALAPPDATA\FactoryNode\local-agent\stop.ps1"
+Stop-ScheduledTask -TaskName 'FactoryNode Local Agent'
 ```
 
 Iniciar novamente:
 
 ```powershell
-& "$env:LOCALAPPDATA\FactoryNode\local-agent\start.cmd"
+Start-ScheduledTask -TaskName 'FactoryNode Local Agent'
 ```
+
+Diagnóstico:
+
+```powershell
+Get-ScheduledTaskInfo -TaskName 'FactoryNode Local Agent'
+Get-Content "$env:LOCALAPPDATA\FactoryNode\local-agent\logs\agent.log" -Tail 50
+```
+
+## Incidente de bootstrap — porta 8765
+
+No host Windows real, o bind em `127.0.0.1:8765` falhou com `WinError 10013`, indicando que a porta estava bloqueada/reservada pelo stack de rede local. A porta canônica foi movida para `18765`; isso evita depender da faixa problemática e o instalador registra explicitamente a porta usada.
 
 ## Próxima camada: ChatGPT ↔ notebook
 
-Este commit entrega o lado local. Para que um chat consiga chamar o agente como ferramenta sem usar GitHub Issue como BUS, é necessário um canal que apresente essas operações ao ChatGPT (por exemplo um conector/MCP remoto compatível). Uma extensão Chrome pode ser interface, mas uma extensão isolada não transforma automaticamente `127.0.0.1` em uma ferramenta do modelo na nuvem.
+Este componente entrega o lado local. Para que um chat consiga chamar o agente como ferramenta sem usar GitHub Issue como BUS, é necessário um canal que apresente essas operações ao ChatGPT, por exemplo um conector/MCP/extensão compatível. Uma extensão Chrome pode ser interface, mas uma extensão isolada não transforma automaticamente `127.0.0.1` em uma ferramenta do modelo na nuvem.
 
 A próxima camada deve preservar duas propriedades: o token nunca sai para páginas web comuns e o canal externo deve autenticar a máquina do usuário. O executor local já está preparado para ser o backend desse adaptador.
 
 ## Relação com FactoryBridge
 
-FactoryBridge continua útil para:
-
-- bootstrap e reinstalação;
-- recovery quando o canal direto cair;
-- ações administrativas versionadas.
-
-Não é necessário passar o trabalho cotidiano por payload hash, allowlists e `script.run` depois que o canal direto estiver disponível.
+FactoryBridge continua útil para bootstrap, reinstalação, recovery e ações administrativas versionadas. O trabalho cotidiano não precisa passar por payload hash, allowlists e `script.run` depois que o canal direto estiver disponível.
