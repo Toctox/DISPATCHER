@@ -12,22 +12,28 @@ import (
 
 type githubBusEnvelopeAlias githubBusEnvelope
 
-type githubBusEnvelopeWire struct {
-	githubBusEnvelopeAlias
-	Diagnostic *FailureDiagnostic `json:"diagnostic,omitempty"`
-}
-
 // MarshalJSON is the canonical remote-publication boundary for Factory Bus
 // envelopes. It sanitizes human text and derives failure diagnostics from the
 // durable local evidence before the envelope is hashed, persisted or posted.
 func (e githubBusEnvelope) MarshalJSON() ([]byte, error) {
-	safe := e
+	safe := githubBusEnvelopeAlias(e)
 	safe.Summary = remoteCheckpointSummary(safe.Summary)
-	wire := githubBusEnvelopeWire{
-		githubBusEnvelopeAlias: githubBusEnvelopeAlias(safe),
-		Diagnostic:             sanitizeFailureDiagnostic(outboundDiagnosticForEnvelope(safe)),
+	base, err := json.Marshal(safe)
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(wire)
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(base, &payload); err != nil {
+		return nil, err
+	}
+	if diagnostic := sanitizeFailureDiagnostic(outboundDiagnosticForEnvelope(e)); diagnostic != nil {
+		raw, err := json.Marshal(diagnostic)
+		if err != nil {
+			return nil, err
+		}
+		payload["diagnostic"] = raw
+	}
+	return json.Marshal(payload)
 }
 
 // UnmarshalJSON keeps strict unknown-field rejection while accepting the
@@ -35,20 +41,34 @@ func (e githubBusEnvelope) MarshalJSON() ([]byte, error) {
 // evidence, never an input authority field, so they are rejected on missions
 // and controls and intentionally discarded after parsing.
 func (e *githubBusEnvelope) UnmarshalJSON(data []byte) error {
-	var wire githubBusEnvelopeWire
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&wire); err != nil {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	decoded := githubBusEnvelope(wire.githubBusEnvelopeAlias)
-	if wire.Diagnostic != nil {
-		t := strings.ToUpper(strings.TrimSpace(decoded.Type))
-		if t != "CHECKPOINT" {
+	diagnosticRaw, hasDiagnostic := fields["diagnostic"]
+	delete(fields, "diagnostic")
+	clean, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	var decoded githubBusEnvelopeAlias
+	dec := json.NewDecoder(bytes.NewReader(clean))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&decoded); err != nil {
+		return err
+	}
+	if hasDiagnostic && string(diagnosticRaw) != "null" {
+		if !strings.EqualFold(strings.TrimSpace(decoded.Type), "CHECKPOINT") {
 			return errors.New("diagnostic is output-only and only valid on CHECKPOINT envelopes")
 		}
+		var diagnostic FailureDiagnostic
+		dec = json.NewDecoder(bytes.NewReader(diagnosticRaw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&diagnostic); err != nil {
+			return err
+		}
 	}
-	*e = decoded
+	*e = githubBusEnvelope(decoded)
 	return nil
 }
 
