@@ -31,6 +31,23 @@ func sanitizeRemoteDiagnostics(d remoteCheckpointDiagnostics) remoteCheckpointDi
 	return d
 }
 
+func remoteDiagnosticsForCheckpoint(cp MissionCheckpoint) *remoteCheckpointDiagnostics {
+	d := checkpointDiagnostics(cp)
+	if d.Phase == "" && d.ExitCode == nil && d.Error == "" && d.StdoutTail == "" && d.StderrTail == "" && d.FailureClass == "" && d.Confidence == "" && d.Evidence == "" && d.RecommendedNextAction == "" && d.TRXSummary == "" {
+		return nil
+	}
+	return &d
+}
+
+func sanitizeRemoteEnvelope(e githubBusEnvelope) githubBusEnvelope {
+	e.Summary = remoteCheckpointSummary(e.Summary)
+	if e.Diagnostics != nil {
+		d := sanitizeRemoteDiagnostics(*e.Diagnostics)
+		e.Diagnostics = &d
+	}
+	return e
+}
+
 func checkpointDiagnostics(cp MissionCheckpoint) remoteCheckpointDiagnostics {
 	if strings.EqualFold(cp.State, "DONE") {
 		return remoteCheckpointDiagnostics{}
