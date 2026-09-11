@@ -35,7 +35,9 @@ func TestAdminPollerSequentialContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; [scriptblock]::Create((Get-Content -LiteralPath $args[0] -Raw)) | Out-Null", path)
+	quoted := strings.ReplaceAll(path, "'", "''")
+	command := "$ErrorActionPreference='Stop'; [scriptblock]::Create((Get-Content -LiteralPath '" + quoted + "' -Raw)) | Out-Null"
+	cmd := exec.Command(powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("admin poller PowerShell parse failed: %v %s", err, out)
 	}
