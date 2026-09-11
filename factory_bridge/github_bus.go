@@ -49,6 +49,7 @@ type githubBusEnvelope struct {
 	Action          string `json:"action,omitempty"`
 	State           string `json:"state,omitempty"`
 	Summary         string `json:"summary,omitempty"`
+	Diagnostics     *remoteCheckpointDiagnostics `json:"diagnostics,omitempty"`
 	Commit          string `json:"commit,omitempty"`
 	DurationMs      int64  `json:"durationMs,omitempty"`
 	BridgeVersion   string `json:"bridgeVersion,omitempty"`
@@ -212,7 +213,7 @@ func listGitHubBusComments(token string, state githubBusState) ([]githubIssueCom
 
 func sendGitHubBusEnvelope(token string, envelope githubBusEnvelope) error {
 	envelope.Protocol = githubBusProtocol
-	envelope.Summary = sanitizeRemoteText(envelope.Summary)
+	envelope = sanitizeRemoteEnvelope(envelope)
 	if envelope.ObservedAt == "" {
 		envelope.ObservedAt = time.Now().UTC().Format(time.RFC3339)
 	}
@@ -294,6 +295,7 @@ func checkpointEnvelope(cp MissionCheckpoint) githubBusEnvelope {
 		Kind:            cp.Kind,
 		State:           cp.State,
 		Summary:         remoteCheckpointSummary(cp.Summary),
+		Diagnostics:     remoteDiagnosticsForCheckpoint(cp),
 		Commit:          cp.Commit,
 		DurationMs:      cp.DurationMs,
 		BridgeVersion:   cp.BridgeVersion,
@@ -436,7 +438,9 @@ func recoverInterruptedGitHubMissions(token string) {
 }
 
 func pollGitHubBusOnce(cfg Config) error {
-	if err := reconcileTerminalOutbox(); err != nil { return err }
+	if err := reconcileTerminalOutbox(); err != nil {
+		return err
+	}
 	_, token, credentialErr := githubCredential(cfg)
 	if credentialErr != nil {
 		token = ""
