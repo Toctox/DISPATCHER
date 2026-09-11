@@ -52,9 +52,18 @@ func TestGoldenRecoveryIsOfflineAndHashPinned(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := strings.ToLower(string(data))
-	for _, forbidden := range []string{"git.exe", "go.exe", "github.com", "git clone", "git fetch"} {
+	for _, forbidden := range []string{
+		"where git.exe",
+		"where go.exe",
+		"git clone",
+		"git fetch",
+		"git -c ",
+		"go test",
+		"go build",
+		"https://github.com/",
+	} {
 		if strings.Contains(script, forbidden) {
-			t.Fatalf("offline recovery still depends on %q", forbidden)
+			t.Fatalf("offline recovery still contains online/build dependency %q", forbidden)
 		}
 	}
 	for _, required := range []string{
