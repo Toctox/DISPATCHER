@@ -3,18 +3,47 @@
   let busy = false;
   const seen = new Set();
   let scanTimer = null;
+  let currentRequestId = null;
+  let currentStartedAt = null;
+  let currentState = "IDLE";
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   const assistantRoots = () => [
     ...document.querySelectorAll('[data-message-author-role="assistant"]'),
     ...document.querySelectorAll('article[data-turn="assistant"]')
   ];
 
+  function badge() {
+    let el = document.getElementById("local-agent-loop-status");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "local-agent-loop-status";
+      Object.assign(el.style, {
+        position: "fixed", right: "14px", bottom: "14px", zIndex: "2147483647",
+        padding: "7px 10px", borderRadius: "8px", background: "rgba(20,20,20,.88)",
+        color: "#eee", font: "12px/1.25 system-ui,sans-serif", boxShadow: "0 2px 12px rgba(0,0,0,.35)",
+        pointerEvents: "none", whiteSpace: "pre-wrap", maxWidth: "340px"
+      });
+      document.documentElement.appendChild(el);
+    }
+    return el;
+  }
+
+  function setState(state, detail = "") {
+    currentState = state;
+    const elapsed = currentStartedAt ? Math.max(0, Math.floor((Date.now() - currentStartedAt) / 1000)) : 0;
+    badge().textContent = `Local Agent: ${state}` +
+      (currentRequestId ? `\n${currentRequestId}` : "") +
+      (currentStartedAt ? ` · ${elapsed}s` : "") +
+      (detail ? `\n${detail}` : "");
+  }
+  setInterval(() => setState(currentState), 1000);
+
   function blockTexts() {
     const out = [];
     for (const root of assistantRoots()) {
-      const nodes = root.querySelectorAll("pre code, pre");
-      for (const n of nodes) {
-        const text = String(n.textContent || "").replace(/\r\n?/g,"\n").trim();
+      for (const n of root.querySelectorAll("pre code, pre")) {
+        const text = String(n.textContent || "").replace(/\r\n?/g, "\n").trim();
         if (text.startsWith("LOCAL_AGENT_V1")) out.push(text);
       }
     }
@@ -33,13 +62,10 @@
   }
 
   function composer() {
-    const selectors = [
-      'textarea[data-testid="prompt-textarea"]',
-      'textarea#prompt-textarea',
-      '[data-testid="prompt-textarea"][contenteditable]',
-      '#prompt-textarea[contenteditable]'
-    ];
-    for (const s of selectors) {
+    for (const s of [
+      'textarea[data-testid="prompt-textarea"]', 'textarea#prompt-textarea',
+      '[data-testid="prompt-textarea"][contenteditable]', '#prompt-textarea[contenteditable]'
+    ]) {
       for (const el of document.querySelectorAll(s)) {
         if (el && el.isConnected && !el.disabled && getComputedStyle(el).display !== "none") return el;
       }
@@ -47,16 +73,12 @@
     return null;
   }
 
-  function composerText(el) {
-    if (!el) return "";
-    return el.tagName === "TEXTAREA" ? el.value : (el.innerText || el.textContent || "");
-  }
+  const composerText = el => !el ? "" : el.tagName === "TEXTAREA" ? el.value : (el.innerText || el.textContent || "");
 
   function insert(el, text) {
     el.focus();
     if (el.tagName === "TEXTAREA") {
-      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value").set;
-      setter.call(el, text);
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(el, text);
     } else {
       const selection = document.getSelection();
       const range = document.createRange();
@@ -65,72 +87,112 @@
       selection.addRange(range);
       if (!document.execCommand("insertText", false, text)) throw new Error("COMPOSER_INSERT_FAILED");
     }
-    el.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:text}));
-    el.dispatchEvent(new Event("change",{bubbles:true}));
+    el.dispatchEvent(new InputEvent("input", {bubbles: true, inputType: "insertText", data: text}));
+    el.dispatchEvent(new Event("change", {bubbles: true}));
   }
 
-  const sleep = ms => new Promise(r => setTimeout(r,ms));
-
   async function waitComposer() {
-    const deadline = Date.now()+30000;
-    while (Date.now()<deadline) {
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
       const el = composer();
       const stop = document.querySelector('button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Parar"]');
-      if (el && !stop && composerText(el).trim()==="") return el;
+      if (el && !stop && composerText(el).trim() === "") return el;
+      setState("WAITING_COMPOSER");
       await sleep(250);
     }
     throw new Error("COMPOSER_NOT_READY");
   }
 
   async function submit(text) {
+    setState("SENDING");
     const el = await waitComposer();
-    insert(el,text);
+    insert(el, text);
     await sleep(150);
-    const sendSelectors = [
-      'button[data-testid="send-button"]',
-      'button#composer-submit-button',
-      'button[aria-label="Send prompt"]',
-      'button[aria-label="Enviar prompt"]'
-    ];
-    for (const s of sendSelectors) {
+    for (const s of [
+      'button[data-testid="send-button"]', 'button#composer-submit-button',
+      'button[aria-label="Send prompt"]', 'button[aria-label="Enviar prompt"]'
+    ]) {
       const b = document.querySelector(s);
-      if (b && !b.disabled && b.getAttribute("aria-disabled")!=="true") {
-        b.click();
-        return;
-      }
+      if (b && !b.disabled && b.getAttribute("aria-disabled") !== "true") { b.click(); return; }
     }
-    el.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",bubbles:true,cancelable:true}));
-    el.dispatchEvent(new KeyboardEvent("keyup",{key:"Enter",code:"Enter",bubbles:true,cancelable:true}));
+    el.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", code: "Enter", bubbles: true, cancelable: true}));
+    el.dispatchEvent(new KeyboardEvent("keyup", {key: "Enter", code: "Enter", bubbles: true, cancelable: true}));
   }
 
-  function resultMessage(request, response) {
-    let payload = {
-      protocol:"LOCAL_AGENT_RESULT_V1",
-      requestId:request.id,
-      response
-    };
+  function resultMessage(requestId, response) {
+    let payload = {protocol: "LOCAL_AGENT_RESULT_V1", requestId, response};
     let raw = JSON.stringify(payload);
     if (raw.length > 28000) {
-      payload = {
-        protocol:"LOCAL_AGENT_RESULT_V1",
-        requestId:request.id,
-        response:{status:"ERROR",error:"RESULT_TOO_LARGE_AFTER_TRUNCATION"}
-      };
+      payload = {protocol: "LOCAL_AGENT_RESULT_V1", requestId, response: {status: "ERROR", error: "RESULT_TOO_LARGE_AFTER_TRUNCATION"}};
       raw = JSON.stringify(payload);
     }
     return `LOCAL_AGENT_RESULT_V1\n${raw}\nEND_LOCAL_AGENT_RESULT_V1`;
   }
 
+  async function runtimeMessage(message, retries = 6) {
+    let last;
+    for (let i = 0; i < retries; i++) {
+      try {
+        const r = await chrome.runtime.sendMessage(message);
+        if (!r || r.status !== "OK") throw new Error(r?.error || "EXTENSION_CHANNEL_ERROR");
+        return r.value;
+      } catch (e) {
+        last = e;
+        setState("RECOVERING_CHANNEL", String(e?.message || e));
+        await sleep(Math.min(5000, 500 * (i + 1)));
+      }
+    }
+    throw last || new Error("EXTENSION_CHANNEL_ERROR");
+  }
+
+  async function deliverRequest(requestId) {
+    currentRequestId = requestId;
+    if (!currentStartedAt) currentStartedAt = Date.now();
+    const deadline = Date.now() + 2 * 60 * 60 * 1000;
+    while (Date.now() < deadline) {
+      let st;
+      try { st = await runtimeMessage({type: "GET_REQUEST_STATUS", requestId}, 3); }
+      catch (e) { setState("RECOVERING_CHANNEL", String(e?.message || e)); await sleep(1500); continue; }
+      setState(st.state || "UNKNOWN", st.error || st.transportError || "");
+
+      if (st.state === "RESPONSE_READY" || st.state === "SENDING") {
+        await runtimeMessage({type: "MARK_SENDING", requestId}, 3);
+        await submit(resultMessage(requestId, {status: "OK", value: st.result}));
+        await runtimeMessage({type: "MARK_SENT", requestId}, 3);
+        setState("SENT");
+        return;
+      }
+      if (st.state === "SENT") { setState("SENT"); return; }
+      if (st.state === "STALLED") {
+        await submit(resultMessage(requestId, {status: "ERROR", error: st.error || "REQUEST_STALLED"}));
+        await runtimeMessage({type: "MARK_SENT", requestId, preserveState: true}, 3);
+        setState("STALLED", st.error || "");
+        return;
+      }
+      await sleep(1000);
+    }
+    await submit(resultMessage(requestId, {status: "ERROR", error: "REQUEST_WATCHDOG_TIMEOUT"}));
+    setState("STALLED", "REQUEST_WATCHDOG_TIMEOUT");
+  }
+
   async function processRequest(req, textKey) {
     busy = true;
     seen.add(textKey);
+    currentRequestId = req.id;
+    currentStartedAt = Date.now();
+    setState("RECEIVED");
     try {
-      const response = await chrome.runtime.sendMessage({type:"EXECUTE",request:req});
-      await submit(resultMessage(req,response));
+      const started = await runtimeMessage({type: "START_REQUEST", request: req}, 6);
+      setState(started.state || "EXECUTING", started.error || "");
+      await deliverRequest(req.id);
     } catch (e) {
-      await submit(resultMessage(req,{status:"ERROR",error:String(e?.message || e)}));
+      const msg = String(e?.message || e);
+      setState("STALLED", msg);
+      try { await submit(resultMessage(req.id, {status: "ERROR", error: msg})); } catch (_) {}
     } finally {
       busy = false;
+      currentRequestId = null;
+      currentStartedAt = null;
       scheduleScan();
     }
   }
@@ -141,34 +203,53 @@
     for (const text of blockTexts()) {
       if (seen.has(text)) continue;
       let req;
-      try { req = parseBlock(text); }
-      catch (_) { continue; } // streaming/incomplete block: retry on next mutation
+      try { req = parseBlock(text); } catch (_) { continue; }
       if (!req) continue;
-      await processRequest(req,text);
+      await processRequest(req, text);
       return;
     }
   }
 
   function scheduleScan() {
     if (scanTimer) clearTimeout(scanTimer);
-    scanTimer = setTimeout(scan,500);
+    scanTimer = setTimeout(scan, 500);
   }
 
-  chrome.runtime.onMessage.addListener((m,_sender,sendResponse) => {
+  chrome.runtime.onMessage.addListener((m, _sender, sendResponse) => {
     if (m?.type === "ARM_NOW") {
-      // Ignore every command already rendered before explicit arming.
       for (const text of blockTexts()) seen.add(text);
       armed = true;
+      setState("READY");
       scheduleScan();
-      sendResponse({ok:true,ignoredExisting:seen.size});
+      sendResponse({ok: true, ignoredExisting: seen.size});
       return;
     }
     if (m?.type === "DISARM") {
       armed = false;
-      sendResponse({ok:true});
+      setState("DISARMED");
+      sendResponse({ok: true});
       return;
     }
   });
 
-  new MutationObserver(scheduleScan).observe(document.documentElement,{subtree:true,childList:true,characterData:true});
+  new MutationObserver(scheduleScan).observe(document.documentElement, {subtree: true, childList: true, characterData: true});
+
+  (async () => {
+    try {
+      const r = await runtimeMessage({type: "CONTENT_READY"}, 3);
+      armed = Boolean(r?.armed);
+      setState(armed ? "READY" : "DISARMED");
+      if (armed && r?.pendingRequestId) {
+        busy = true;
+        currentRequestId = r.pendingRequestId;
+        currentStartedAt = Date.now();
+        try { await deliverRequest(r.pendingRequestId); }
+        finally { busy = false; currentRequestId = null; currentStartedAt = null; scheduleScan(); }
+      } else if (armed) {
+        scheduleScan();
+      }
+    } catch (e) {
+      setState("CHANNEL_OFFLINE", String(e?.message || e));
+    }
+  })();
 })();
