@@ -39,7 +39,7 @@
     const elapsed = currentStartedAt ? Math.max(0, Math.floor((Date.now() - currentStartedAt) / 1000)) : 0;
     badge().textContent = `Local Agent: ${state}` +
       (currentRequestId ? `\n${currentRequestId}` : "") +
-      (currentStartedAt ? ` ÃƒÂ¢Ã¢â‚¬ÂÃ‚Â¬ÃƒÆ’Ã¢â€šÂ¬ ${elapsed}s` : "") +
+      (currentStartedAt ? ` â”¬Ã€ ${elapsed}s` : "") +
       (currentDetail ? `\n${currentDetail}` : "");
   }
   setInterval(() => setState(currentState, currentDetail), 1000);
@@ -285,7 +285,7 @@
   chrome.runtime.onMessage.addListener((m, _sender, sendResponse) => {
     if (m?.type === "ARM_NOW") {
       if (!protocolCompatible) {
-        setState("UPDATE_REQUIRED", "service worker incompatÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒâ€šÃ‚Â¡vel");
+        setState("UPDATE_REQUIRED", "service worker incompatâ”œÂ¡vel");
         sendResponse({ok: false, error: "PROTOCOL_MISMATCH"});
         startRecoveryLoop();
         return;

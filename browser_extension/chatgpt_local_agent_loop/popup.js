@@ -56,3 +56,19 @@ $("disable").onclick = async () => {
 };
 refresh();
 setInterval(refresh, 1500);
+
+// LOCAL_AGENT_AUTO_DISABLE_QUERY_V1
+(() => {
+  const params = new URLSearchParams(location.search);
+  if (params.get("autoDisable") !== "1") return;
+  const delay = Math.max(1000, Number(params.get("delayMs") || 2500));
+  setTimeout(async () => {
+    try {
+      await msg({type: "DISABLE"});
+      document.body.textContent = "Local Agent automation disabled.";
+      setTimeout(() => window.close(), 500);
+    } catch (e) {
+      document.body.textContent = "Auto-disable failed: " + String(e && e.message || e);
+    }
+  }, delay);
+})();
