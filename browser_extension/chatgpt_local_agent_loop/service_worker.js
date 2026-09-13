@@ -273,8 +273,10 @@ async function cancelRequest(id) {
   return stopProcessRequest(entry, "CANCELLED_BY_USER");
 }
 
-function newestRequest(state) {
-  const entries = Object.values(state.requestJournal).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+function newestActiveRequest(state) {
+  const entries = Object.values(state.requestJournal)
+    .filter(x => x.state !== "SENT" && !(x.state === "STALLED" && x.reportedAt))
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   return entries[0] || null;
 }
 
@@ -295,7 +297,7 @@ chrome.runtime.onMessage.addListener((m, sender, sendResponse) => {
       let health;
       try { health = await localCall("/health", "GET", null, 4000); }
       catch (e) { health = {ok: false, error: String(e?.message || e)}; }
-      let active = newestRequest(s);
+      let active = newestActiveRequest(s);
       if (active?.state === "EXECUTING") {
         try { active = await refreshRequest(active.requestId); } catch (_) {}
       }
