@@ -19,8 +19,8 @@ async function refresh() {
     $("status").textContent =
       `Protocolo: ${s.protocolVersion || "antigo"}\n` +
       `Agente: ${s.health?.ok ? "OK" : "OFFLINE"}\n` +
-      `Token: ${s.tokenSaved ? "SALVO" : "NÃO CONFIGURADO"}\n` +
-      `Automação: ${s.automationEnabled ? "ATIVA" : "DESATIVADA"}\n` +
+      `Token: ${s.tokenSaved ? "SALVO" : "N├âO CONFIGURADO"}\n` +
+      `Automa├º├úo: ${s.automationEnabled ? "ATIVA" : "DESATIVADA"}\n` +
       `Tab ID: ${s.enabledTabId ?? "-"}\n` +
       (r ? `Pedido: ${r.requestId}\nEstado: ${r.state}\nDecorrido: ${elapsed(r.startedAt || r.receivedAt)}\nTimeout: ${r.timeoutSeconds || s.defaultProcessTimeoutSeconds || "-"}s\nAtividade: ${r.statusDetail || "normal"}\nErro: ${r.error || r.transportError || "-"}\n` : "Pedido: nenhum\n") +
       `Health: ${JSON.stringify(hp ?? {})}`;
@@ -45,7 +45,7 @@ $("enable").onclick = async () => {
 $("cancel").onclick = async () => {
   try {
     const s = await msg({type: "GET_STATUS"});
-    if (!s.activeRequest?.requestId || s.activeRequest.state !== "EXECUTING") throw new Error("Nenhum pedido em execução");
+    if (!s.activeRequest?.requestId || s.activeRequest.state !== "EXECUTING") throw new Error("Nenhum pedido em execu├º├úo");
     await msg({type: "CANCEL_REQUEST", requestId: s.activeRequest.requestId});
     await refresh();
   } catch (e) { $("status").textContent = String(e.message || e); }

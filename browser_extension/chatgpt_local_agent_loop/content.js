@@ -39,7 +39,7 @@
     const elapsed = currentStartedAt ? Math.max(0, Math.floor((Date.now() - currentStartedAt) / 1000)) : 0;
     badge().textContent = `Local Agent: ${state}` +
       (currentRequestId ? `\n${currentRequestId}` : "") +
-      (currentStartedAt ? ` · ${elapsed}s` : "") +
+      (currentStartedAt ? ` ÃƒÂ¢Ã¢â‚¬ÂÃ‚Â¬ÃƒÆ’Ã¢â€šÂ¬ ${elapsed}s` : "") +
       (currentDetail ? `\n${currentDetail}` : "");
   }
   setInterval(() => setState(currentState, currentDetail), 1000);
@@ -236,6 +236,7 @@
       busy = false;
       currentRequestId = null;
       currentStartedAt = null;
+      setState(armed ? "READY" : "DISARMED", "");
       scheduleScan();
     }
   }
@@ -269,7 +270,7 @@
         currentRequestId = r.pendingRequestId;
         currentStartedAt = Date.now();
         try { await deliverRequest(r.pendingRequestId); }
-        finally { busy = false; currentRequestId = null; currentStartedAt = null; scheduleScan(); }
+        finally { busy = false; currentRequestId = null; currentStartedAt = null; setState(armed ? "READY" : "DISARMED", ""); scheduleScan(); }
       } else if (armed) {
         scheduleScan();
       }
@@ -284,7 +285,7 @@
   chrome.runtime.onMessage.addListener((m, _sender, sendResponse) => {
     if (m?.type === "ARM_NOW") {
       if (!protocolCompatible) {
-        setState("UPDATE_REQUIRED", "service worker incompatível");
+        setState("UPDATE_REQUIRED", "service worker incompatÃƒÂ¢Ã¢â‚¬ÂÃ…â€œÃƒâ€šÃ‚Â¡vel");
         sendResponse({ok: false, error: "PROTOCOL_MISMATCH"});
         startRecoveryLoop();
         return;
