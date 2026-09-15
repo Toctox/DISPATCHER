@@ -43,6 +43,7 @@ def _plan(tmp_path):
 class FakeApi:
     def __init__(self):
         self.uploads = []
+        self.validations = []
         self.captures = []
         self.forwardings = []
         self.events = {}
@@ -65,6 +66,18 @@ class FakeApi:
         self.uploads.append((str(path), value))
         return value
 
+    def validate_capture(
+        self,
+        *,
+        mode,
+        temporary_id,
+        file_name,
+        restriction,
+        credential_capturer,
+    ):
+        self.validations.append((mode, temporary_id, file_name))
+        return {"isSuccess": True}
+
     def capture_citizen_file(
         self,
         *,
@@ -75,6 +88,7 @@ class FakeApi:
         credential_capturer,
         validate_first,
     ):
+        assert validate_first is False
         event_id = str(uuid.uuid4())
         document_id = str(uuid.uuid4())
         self.captures.append((mode, temporary_id, file_name, event_id))
@@ -126,6 +140,7 @@ def test_submit_resumes_without_duplicate_writes(tmp_path):
     assert first["forwardingId"] == second["forwardingId"]
     assert first["status"] == "SENT"
     assert len(api.uploads) == 3
+    assert len(api.validations) == 3
     assert len(api.captures) == 3
     assert len(api.forwardings) == 1
 
