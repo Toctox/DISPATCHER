@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .edocs_api import EdocsDestination
+from .edocs_api import EdocsDestination, MAX_PDF_BYTES
 
 CPF_DIGITS = re.compile(r"\D+")
 CAPTURE_MODES = {"digitalizado", "nato-digital-copia", "icp-brasil"}
@@ -96,8 +96,11 @@ def _package_file(role: str, entry: Any) -> PackageFile:
     if path.suffix.lower() != ".pdf":
         raise EdocsPlanError(f"files.{role}.path must be a PDF")
     size = path.stat().st_size
-    if size < 1:
-        raise EdocsPlanError(f"files.{role}.path is empty")
+    if not (1 <= size <= MAX_PDF_BYTES):
+        raise EdocsPlanError(f"files.{role}.path size is outside the E-Docs PDF limit")
+    with path.open("rb") as handle:
+        if handle.read(5) != b"%PDF-":
+            raise EdocsPlanError(f"files.{role}.path does not have a PDF signature")
     return PackageFile(
         role=role,
         path=path,
@@ -114,7 +117,10 @@ def build_plan(manifest_path: str | Path) -> SubmissionPlan:
         raise EdocsPlanError("manifest must be a JSON object")
 
     producer_name = _required_text(data, "producerName")
-    producer_cpf = format_cpf(_required_text(data, "producerCpf"))
+    cpf_value = data.get("producerCpf", data.get("cpf"))
+    if not isinstance(cpf_value, str) or not cpf_value.strip():
+        raise EdocsPlanError("producerCpf (or cpf) is required")
+    producer_cpf = format_cpf(cpf_value)
     ie = _required_text(data, "ie")
     municipality = _required_text(data, "municipality").upper()
     expected_destination_id = HAR_ARE_IDS.get(municipality)
@@ -135,7 +141,9 @@ def build_plan(manifest_path: str | Path) -> SubmissionPlan:
         name=f"ARE {municipality}",
         id=expected_destination_id,
     )
-    subject = str(data.get("subject") or f"TERMO DE ADESÃO NF-e PRODUTOR RURAL - {producer_name}").strip()
+    subject = str(
+        data.get("subject") or f"TERMO DE ADESÃO NF-e PRODUTOR RURAL - {producer_name}"
+    ).strip()
     message = str(
         data.get("message")
         or (
@@ -167,7 +175,12 @@ def build_plan(manifest_path: str | Path) -> SubmissionPlan:
         ],
     }
     fingerprint = hashlib.sha256(
-        json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            canonical,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
     ).hexdigest()
     return SubmissionPlan(
         producer_name=producer_name,
