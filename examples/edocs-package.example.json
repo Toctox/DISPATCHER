@@ -1,0 +1,22 @@
+{
+  "producerName": "Eunice Mariano Gonçalves",
+  "cpf": "101.517.397-73",
+  "ie": "114066574",
+  "municipality": "Aracruz",
+  "subject": "Termo de Adesão NF-e Produtor Rural - Eunice Mariano Gonçalves",
+  "message": "Encaminho a documentação para análise do Termo de Adesão para emissão de NF-e de Produtor Rural.",
+  "files": {
+    "procuracao": {
+      "path": "C:/cafe/EUNICE/PROCURACAO.pdf",
+      "captureMode": "nato-digital-copia"
+    },
+    "termoAdesao": {
+      "path": "C:/cafe/EUNICE/TERMO_ADESAO.pdf",
+      "captureMode": "nato-digital-copia"
+    },
+    "documentosPessoais": {
+      "path": "C:/cafe/EUNICE/DOCUMENTOS_PESSOAIS.pdf",
+      "captureMode": "digitalizado"
+    }
+  }
+}
