@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .edocs_api import EdocsApi, EdocsError, organizational_restriction
+from .edocs_api import EdocsApi, organizational_restriction
 from .edocs_plan import SubmissionPlan, plan_as_dict
 
 
@@ -85,11 +85,10 @@ class EdocsSubmissionWorkflow:
 
     def _resolve_destination(self, plan: SubmissionPlan) -> None:
         patriarca = EdocsApi.resolve_named_agent(
-            self.api.patriarcas(), contains=("GOVES",),
+            self.api.patriarcas(), contains=("GOVES",)
         )
         orgao = EdocsApi.resolve_named_agent(
-            self.api.organizacoes(patriarca.id),
-            contains=("SEFAZ",),
+            self.api.organizacoes(patriarca.id), contains=("SEFAZ",)
         )
         EdocsApi.resolve_named_agent(
             self.api.setores(orgao.id),
@@ -129,21 +128,27 @@ class EdocsSubmissionWorkflow:
 
             if not doc.get("documentId"):
                 if not doc.get("captureEventId"):
-                    # Write-ahead uncertainty barrier. If the request is accepted by E-Docs
-                    # but the response is lost, we must not blindly capture a second document.
+                    # Validate before arming the write-ahead barrier: validation itself
+                    # does not create the institutional document.
+                    self.api.validate_capture(
+                        mode=item.capture_mode,
+                        temporary_id=doc["temporaryUploadId"],
+                        file_name=item.path.name,
+                        restriction=organizational_restriction(),
+                        credential_capturer=True,
+                    )
+                    # If capture is accepted but the response is lost, do not blindly
+                    # create a second legal document on the next run.
                     doc["captureMutationUncertain"] = True
                     self._save(state)
-                    try:
-                        event_id = self.api.capture_citizen_file(
-                            mode=item.capture_mode,
-                            temporary_id=doc["temporaryUploadId"],
-                            file_name=item.path.name,
-                            restriction=organizational_restriction(),
-                            credential_capturer=True,
-                            validate_first=True,
-                        )
-                    except Exception:
-                        raise
+                    event_id = self.api.capture_citizen_file(
+                        mode=item.capture_mode,
+                        temporary_id=doc["temporaryUploadId"],
+                        file_name=item.path.name,
+                        restriction=organizational_restriction(),
+                        credential_capturer=True,
+                        validate_first=False,
+                    )
                     doc["captureEventId"] = event_id
                     doc["captureMutationUncertain"] = False
                     state["status"] = "CAPTURE_SUBMITTED"
@@ -158,20 +163,17 @@ class EdocsSubmissionWorkflow:
             if not state.get("forwardingEventId"):
                 state["mutationUncertain"] = True
                 self._save(state)
-                try:
-                    event_id = self.api.create_forwarding(
-                        subject=plan.subject,
-                        message=plan.message,
-                        responsible_id=state["responsibleId"],
-                        destination_ids=[plan.destination.id],
-                        document_ids=[
-                            state["documents"][item.role]["documentId"] for item in plan.files
-                        ],
-                        send_email_notifications=True,
-                        restriction=organizational_restriction(),
-                    )
-                except Exception:
-                    raise
+                event_id = self.api.create_forwarding(
+                    subject=plan.subject,
+                    message=plan.message,
+                    responsible_id=state["responsibleId"],
+                    destination_ids=[plan.destination.id],
+                    document_ids=[
+                        state["documents"][item.role]["documentId"] for item in plan.files
+                    ],
+                    send_email_notifications=True,
+                    restriction=organizational_restriction(),
+                )
                 state["forwardingEventId"] = event_id
                 state["mutationUncertain"] = False
                 state["status"] = "FORWARDING_SUBMITTED"
