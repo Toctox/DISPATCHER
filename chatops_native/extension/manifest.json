@@ -3,6 +3,8 @@
   "name": "ChatOps Codex Bridge",
   "version": "0.1.0",
   "description": "Connects explicit ChatGPT requests to the local Codex CLI through Chrome Native Messaging.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7jU6NS/ZlbKMo6unSu778sXn76huTc2iq8AF3j8BzDhLtnU5sHMwbIFISvlRkUpBVk9RcDQF+S9jLLx4dAtVAki7r9l/nJ8s7SV38EkA9yDrr715VIuvd2w6j73Lugr+IAg05krKD0krgpsrsIwbcmiaOYL/yVfvv/qzKc5AxKTGzZvFT4rA8vYYRiWS7D5Znue9l7QN3c8ir6JYDRI9+6fuoQSGAFcIUhuE1ILu7Nie2kMIUmrtUuns/JvLB9/yxq0zBi9CZ6Gm2btFY3zdW5jvf/K6VGvAxZOKP3qmvvBrk0GsRKf8hQoyTs86uyWrN2nPWGqPY+CjrzIQ+SXvHQIDAQAB",
+  "minimum_chrome_version": "120",
   "permissions": ["nativeMessaging", "tabs"],
   "host_permissions": [
     "https://chatgpt.com/*",
