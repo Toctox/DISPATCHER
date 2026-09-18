@@ -1,0 +1,114 @@
+param(
+    [string]$ExtensionId = "",
+    [switch]$RunSmoke
+)
+
+$ErrorActionPreference = "Stop"
+
+$HostName = "com.toctox.chatops_codex"
+$Root = Join-Path $env:LOCALAPPDATA "ChatOpsCodex"
+$HostExe = Join-Path $Root "ChatOpsCodexHost.exe"
+$ExtensionTarget = Join-Path $Root "extension"
+$ManifestPath = Join-Path $Root "$HostName.json"
+$RegistryPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"
+
+$HostSource = Join-Path $PSScriptRoot "host"
+$ExtensionSource = Join-Path $PSScriptRoot "extension"
+
+if (-not (Test-Path -LiteralPath $HostSource)) {
+    throw "Host source not found: $HostSource"
+}
+if (-not (Test-Path -LiteralPath $ExtensionSource)) {
+    throw "Extension source not found: $ExtensionSource"
+}
+
+$Go = Get-Command go.exe -ErrorAction SilentlyContinue
+if (-not $Go) {
+    throw "go.exe was not found on PATH. Install Go or build ChatOpsCodexHost.exe separately."
+}
+
+New-Item -ItemType Directory -Force -Path $Root | Out-Null
+
+Write-Host "Building native host..."
+& $Go.Source build -trimpath -ldflags "-s -w" -o $HostExe $HostSource
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $HostExe)) {
+    throw "Native host build failed."
+}
+
+if (Test-Path -LiteralPath $ExtensionTarget) {
+    Remove-Item -LiteralPath $ExtensionTarget -Recurse -Force
+}
+Copy-Item -LiteralPath $ExtensionSource -Destination $ExtensionTarget -Recurse -Force
+
+Write-Host ""
+Write-Host "Native host: $HostExe"
+Write-Host "Chrome extension folder: $ExtensionTarget"
+
+Write-Host ""
+Write-Host "Validating Codex discovery..."
+& $HostExe --self-test
+if ($LASTEXITCODE -ne 0) {
+    throw "Native host self-test failed."
+}
+
+if ($RunSmoke) {
+    Write-Host ""
+    Write-Host "Running harmless Codex smoke..."
+    & $HostExe --smoke
+    if ($LASTEXITCODE -ne 0) {
+        throw "Codex smoke failed."
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($ExtensionId)) {
+    Write-Host ""
+    Write-Host "PHASE 1 COMPLETE"
+    Write-Host "1. Open chrome://extensions"
+    Write-Host "2. Enable Developer mode"
+    Write-Host "3. Click 'Load unpacked' and select:"
+    Write-Host "   $ExtensionTarget"
+    Write-Host "4. Copy the 32-character extension ID"
+    Write-Host "5. Run this installer again with:"
+    Write-Host "   .\install.ps1 -ExtensionId <EXTENSION_ID>"
+    Write-Host ""
+    Write-Host "No Native Messaging registry entry was created yet."
+    exit 0
+}
+
+if ($ExtensionId -notmatch '^[a-p]{32}$') {
+    throw "ExtensionId must be the exact 32-character Chrome extension id (letters a-p)."
+}
+
+$Manifest = [ordered]@{
+    name = $HostName
+    description = "Local ChatOps Codex host"
+    path = $HostExe
+    type = "stdio"
+    allowed_origins = @("chrome-extension://$ExtensionId/")
+} | ConvertTo-Json -Depth 4
+
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($ManifestPath, $Manifest, $Utf8NoBom)
+
+New-Item -Path $RegistryPath -Force | Out-Null
+Set-Item -Path $RegistryPath -Value $ManifestPath
+
+$InstallState = [ordered]@{
+    installedAt = [DateTime]::UtcNow.ToString("o")
+    hostName = $HostName
+    hostExecutable = $HostExe
+    extensionDirectory = $ExtensionTarget
+    extensionId = $ExtensionId
+    nativeManifest = $ManifestPath
+    registryPath = $RegistryPath
+} | ConvertTo-Json -Depth 4
+[System.IO.File]::WriteAllText((Join-Path $Root "install-state.json"), $InstallState, $Utf8NoBom)
+
+Write-Host ""
+Write-Host "INSTALL COMPLETE"
+Write-Host "Registered per-user Native Messaging host:"
+Write-Host "  $RegistryPath"
+Write-Host "Allowed extension:"
+Write-Host "  chrome-extension://$ExtensionId/"
+Write-Host ""
+Write-Host "Reload the extension in chrome://extensions, then reload chatgpt.com."
