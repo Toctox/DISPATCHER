@@ -30,9 +30,15 @@ if (-not $Go) {
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
 
 Write-Host "Building native host..."
-& $Go.Source build -trimpath -ldflags "-s -w" -o $HostExe $HostSource
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $HostExe)) {
-    throw "Native host build failed."
+Push-Location $HostSource
+try {
+    & $Go.Source build -trimpath -ldflags "-s -w" -o $HostExe .
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $HostExe)) {
+        throw "Native host build failed."
+    }
+}
+finally {
+    Pop-Location
 }
 
 if (Test-Path -LiteralPath $ExtensionTarget) {
