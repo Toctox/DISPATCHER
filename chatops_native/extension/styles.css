@@ -1,0 +1,33 @@
+.chatops-codex-run {
+  margin: 8px 0 14px 0;
+  padding: 7px 12px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  font: inherit;
+  cursor: pointer;
+  background: transparent;
+}
+
+.chatops-codex-run:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.chatops-codex-toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  max-width: 420px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: CanvasText;
+  background: Canvas;
+  border: 1px solid currentColor;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.2);
+  font: 13px/1.4 system-ui, sans-serif;
+}
+
+.chatops-codex-toast.error {
+  font-weight: 600;
+}
