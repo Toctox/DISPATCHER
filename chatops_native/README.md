@@ -45,9 +45,15 @@ The native host accepts only:
 - permits `workspace-write` only when the Chrome confirmation path sets `confirmWrite=true`;
 - caps request size, timeout, and returned output.
 
-The Native Messaging manifest is registered under HKCU only and its `allowed_origins` contains the exact extension ID. Chrome Native Messaging does not permit wildcards in this field.
+The extension includes a fixed public development key, giving it the stable unpacked-extension ID:
 
-The extension never auto-sends the result back to ChatGPT. It places `LOCAL_CODEX_RESULT_V1` in an empty composer; the user reviews and sends it. If the composer is occupied, it copies the result to the clipboard instead.
+```text
+mhjghnfpggpfmcoheapfibohfeiipmhn
+```
+
+The Native Messaging manifest is registered under HKCU only and its `allowed_origins` contains exactly that extension ID. Chrome Native Messaging does not permit wildcards in this field.
+
+The extension never auto-sends the result back to ChatGPT. It places `LOCAL_CODEX_RESULT_V1` in an empty composer; the user reviews and sends it. If the composer is occupied, it attempts to copy the result instead.
 
 ## Install on Windows
 
@@ -57,28 +63,22 @@ From this directory:
 .\install.ps1 -RunSmoke
 ```
 
-The first run:
+The installer:
 
 1. builds `ChatOpsCodexHost.exe` using the installed Go toolchain;
 2. copies the unpacked extension to `%LOCALAPPDATA%\ChatOpsCodex\extension`;
 3. validates discovery of the installed Codex CLI;
-4. optionally runs a harmless Codex smoke;
-5. intentionally does **not** create the Native Messaging registration yet.
+4. optionally runs the harmless `HOST_CHATGPT_TO_CODEX_OK` smoke;
+5. registers the Native Messaging host under HKCU for the fixed extension ID.
 
-Then:
+Then perform the only manual Chrome step:
 
 1. open `chrome://extensions`;
 2. enable **Developer mode**;
 3. choose **Load unpacked**;
 4. select `%LOCALAPPDATA%\ChatOpsCodex\extension`;
-5. copy the extension's 32-character ID;
-6. register the host:
-
-```powershell
-.\install.ps1 -ExtensionId <EXTENSION_ID>
-```
-
-Reload the extension and the ChatGPT tab.
+5. verify Chrome shows extension ID `mhjghnfpggpfmcoheapfibohfeiipmhn`;
+6. reload the ChatGPT tab.
 
 No administrator privilege is required.
 
