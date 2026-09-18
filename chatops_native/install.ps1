@@ -1,11 +1,11 @@
 param(
-    [string]$ExtensionId = "",
     [switch]$RunSmoke
 )
 
 $ErrorActionPreference = "Stop"
 
 $HostName = "com.toctox.chatops_codex"
+$ExtensionId = "mhjghnfpggpfmcoheapfibohfeiipmhn"
 $Root = Join-Path $env:LOCALAPPDATA "ChatOpsCodex"
 $HostExe = Join-Path $Root "ChatOpsCodexHost.exe"
 $ExtensionTarget = Join-Path $Root "extension"
@@ -49,6 +49,7 @@ Copy-Item -LiteralPath $ExtensionSource -Destination $ExtensionTarget -Recurse -
 Write-Host ""
 Write-Host "Native host: $HostExe"
 Write-Host "Chrome extension folder: $ExtensionTarget"
+Write-Host "Expected extension ID: $ExtensionId"
 
 Write-Host ""
 Write-Host "Validating Codex discovery..."
@@ -64,25 +65,6 @@ if ($RunSmoke) {
     if ($LASTEXITCODE -ne 0) {
         throw "Codex smoke failed."
     }
-}
-
-if ([string]::IsNullOrWhiteSpace($ExtensionId)) {
-    Write-Host ""
-    Write-Host "PHASE 1 COMPLETE"
-    Write-Host "1. Open chrome://extensions"
-    Write-Host "2. Enable Developer mode"
-    Write-Host "3. Click 'Load unpacked' and select:"
-    Write-Host "   $ExtensionTarget"
-    Write-Host "4. Copy the 32-character extension ID"
-    Write-Host "5. Run this installer again with:"
-    Write-Host "   .\install.ps1 -ExtensionId <EXTENSION_ID>"
-    Write-Host ""
-    Write-Host "No Native Messaging registry entry was created yet."
-    exit 0
-}
-
-if ($ExtensionId -notmatch '^[a-p]{32}$') {
-    throw "ExtensionId must be the exact 32-character Chrome extension id (letters a-p)."
 }
 
 $Manifest = [ordered]@{
@@ -117,4 +99,11 @@ Write-Host "  $RegistryPath"
 Write-Host "Allowed extension:"
 Write-Host "  chrome-extension://$ExtensionId/"
 Write-Host ""
-Write-Host "Reload the extension in chrome://extensions, then reload chatgpt.com."
+Write-Host "ONE MANUAL CHROME STEP REMAINS:"
+Write-Host "1. Open chrome://extensions"
+Write-Host "2. Enable Developer mode"
+Write-Host "3. Click 'Load unpacked' and select:"
+Write-Host "   $ExtensionTarget"
+Write-Host "4. Confirm Chrome shows extension ID:"
+Write-Host "   $ExtensionId"
+Write-Host "5. Reload chatgpt.com"
